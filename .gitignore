@@ -1,0 +1,58 @@
+# --- Java / Maven ---
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+dependency-reduced-pom.xml
+.mvn/.gradle-enterprise/
+.mvn/.develocity/
+
+# --- Node / dashboard ---
+node_modules/
+dist/
+.vite/
+*.local
+
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+crash.log
+
+# --- Secrets / local config ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+kubeconfig
+atlas-connection-string.txt
+
+# --- IDE ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+!.vscode/extensions.json
+.settings/
+.classpath
+.project
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Build / test output ---
+*.log
+logs/
+surefire-reports/
+failsafe-reports/
+
+# --- Local-only working notes (deliberately not published) ---
+CLAUDE.md
+LEARNING.md

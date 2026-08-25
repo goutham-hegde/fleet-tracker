@@ -1,0 +1,36 @@
+# Normalize everything to LF in the repository by default.
+* text=auto eol=lf
+
+# Shell scripts MUST be LF — CRLF breaks them on Linux CI runners
+# with "bad interpreter: /bin/sh^M".
+mvnw        text eol=lf
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# Windows batch files MUST be CRLF or they misbehave under cmd.exe.
+*.cmd       text eol=crlf
+*.bat       text eol=crlf
+*.ps1       text eol=crlf
+
+# Explicit text types
+*.java      text eol=lf
+*.xml       text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.tf        text eol=lf
+*.properties text eol=lf
+Dockerfile  text eol=lf
+Makefile    text eol=lf
+
+# Binary — never touch
+*.jar       binary
+*.zip       binary
+*.png       binary
+*.jpg       binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.woff      binary
+*.woff2     binary
