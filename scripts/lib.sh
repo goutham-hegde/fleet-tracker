@@ -24,7 +24,7 @@ for _d in \
   "$_winget_pkgs/Kubernetes.kind_Microsoft.Winget.Source_8wekyb3d8bbwe" \
   "$_winget_pkgs/Helm.Helm_Microsoft.Winget.Source_8wekyb3d8bbwe/windows-amd64" \
   "$_winget_pkgs/Hashicorp.Terraform_Microsoft.Winget.Source_8wekyb3d8bbwe" \
-  "$_winget_pkgs/GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe/bin" \
+  "/c/Program Files/GitHub CLI" \
   "/c/Program Files/Amazon/AWSCLIV2" ; do
   if [ -d "$_d" ]; then
     case ":$PATH:" in *":$_d:"*) ;; *) PATH="$PATH:$_d" ;; esac
