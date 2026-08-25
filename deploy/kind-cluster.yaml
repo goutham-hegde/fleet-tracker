@@ -1,0 +1,39 @@
+# Local Kubernetes cluster for fleet-tracking.
+#
+# Single node on purpose: the Docker VM has ~8 GB and this cluster has to hold
+# Kafka, MongoDB, five JVM services and ArgoCD. Extra nodes buy nothing here
+# and cost ~500 MB each.
+#
+# NodePorts map straight to host ports so the dashboard, Kafka and Mongo are
+# reachable from Windows without a long-lived `kubectl port-forward`.
+#
+# Host ports are deliberately NOT the defaults (8080 / 9092 / 27017):
+#   - 8080  is taken by another service on this machine
+#   - 27017 is taken by a local mongod install
+# Using 18080 / 19092 / 37017 avoids the collision and, more importantly, makes
+# it impossible to connect to the wrong MongoDB by accident.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: fleet-tracking
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # dashboard            -> http://localhost:18080
+      - containerPort: 30080
+        hostPort: 18080
+        protocol: TCP
+      # kafka external       -> localhost:19092
+      - containerPort: 30092
+        hostPort: 19092
+        protocol: TCP
+      # mongodb (cluster)    -> mongodb://localhost:37017
+      - containerPort: 30017
+        hostPort: 37017
+        protocol: TCP
