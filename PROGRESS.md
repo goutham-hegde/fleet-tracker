@@ -198,7 +198,7 @@ makes the project worth showing — everything after adds credibility, nothing a
 
 ## S1 — Tooling and repo skeleton
 
-**2026-08-25 · M0 · commits `c897151`, `ee21db8`**
+**2026-08-25 · M0 · commits `69c5d14`, `c03377a`, `42058ce`, `4f4fa59`, `446ef80`**
 
 Set up the multi-module Maven build, the local Kubernetes cluster, and the scripts that tie them
 together. No application code yet, by design — S1 is scaffolding.
@@ -254,8 +254,9 @@ Published to **[github.com/goutham-hegde/fleet-tracker](https://github.com/gouth
 **Left open**
 
 - Docker VM has ~7 GB; the stack targets 10-12 GB. `preflight.sh` warns on every run.
-- Commits carry a personal email address in the git history, which is public. Switching to a GitHub
-  `noreply` address is a one-line config change if that matters.
+- The repository history was rebuilt so every commit is authored by `goutham-hegde`. Note that
+  GitHub retains force-pushed commits as unreachable objects, still fetchable by direct SHA until
+  it garbage collects.
 
 ---
 
