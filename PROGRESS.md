@@ -262,7 +262,7 @@ Published to **[github.com/goutham-hegde/fleet-tracker](https://github.com/gouth
 
 ## S2 — Canonical event model
 
-**2026-08-27 · M0 · commits `13d3044`, `DOCSHASH`**
+**2026-08-27 · M0 · commits `13d3044`, `5087621`**
 
 Built `libs/events`: the two envelopes every source normalizes into, the five events the platform
 derives for itself, and the JSON configuration all of it travels under. This is the contract every
