@@ -3,11 +3,11 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-08-25 · **Current position:** M0 Walking Skeleton, session S1 of 24 complete
+**Last updated:** 2026-08-27 · **Current position:** M0 Walking Skeleton, session S2 of 24 complete
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
-M0 ██░░░░░░░░  1/3 sessions    ← current
+M0 ███████░░░  2/3 sessions    ← current
 M1 ░░░░░░░░░░  0/2
 M2 ░░░░░░░░░░  0/3
 M3 ░░░░░░░░░░  0/3
@@ -17,7 +17,7 @@ M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                1/24 sessions
+                2/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -30,7 +30,7 @@ pass. Sessions are roughly 3-4 hours and each ends at a committable checkpoint.
 **Capability:** the local platform exists and is reachable. Empty, but real.
 
 - [x] **S1** — Tooling and repo skeleton
-- [ ] **S2** — Canonical event model
+- [x] **S2** — Canonical event model
 - [ ] **S3** — Kafka and MongoDB in Kind
 
 **Exit criteria**
@@ -39,7 +39,7 @@ pass. Sessions are roughly 3-4 hours and each ends at a committable checkpoint.
 - [x] `kubectl get nodes` shows a Ready node
 - [ ] A message round-trips through Kafka via console tools from the host
 - [ ] A document round-trips through Mongo via `mongosh` from the host
-- [ ] Every event type serializes and deserializes losslessly under test
+- [x] Every event type serializes and deserializes losslessly under test
 
 ---
 
@@ -260,10 +260,84 @@ Published to **[github.com/goutham-hegde/fleet-tracker](https://github.com/gouth
 
 ---
 
+## S2 — Canonical event model
+
+**2026-08-27 · M0 · commits `13d3044`, `DOCSHASH`**
+
+Built `libs/events`: the two envelopes every source normalizes into, the five events the platform
+derives for itself, and the JSON configuration all of it travels under. This is the contract every
+later service is written against, so it was worth getting the shape right before anything depends
+on it.
+
+**Built**
+
+- A `sealed` `Event` hierarchy splitting into `SourceEvent` (normalized from a feed, carries the
+  original payload) and `DerivedEvent` (a conclusion this platform reached, carries the id of the
+  event that caused it). Sealing means a `switch` over an event in a consumer is checked by the
+  compiler for exhaustiveness — a new event type becomes a build failure everywhere that forgot it.
+- `PositionEvent` and `StatusEvent`, the two canonical envelopes, both carrying `RawPayload`.
+- Value types `GeoPoint`, `LocationHint`, `TemperatureReading`, and enums `SourceSystem`,
+  `StatusCode`, `ExceptionType`, `Severity`.
+- `ShipmentArrived`, `ShipmentDeparted`, `EtaUpdated`, `ExceptionRaised`, `ExceptionCleared`.
+- `EventJson`, the single shared Jackson configuration. Two services with independently configured
+  mappers agree on field names and disagree on everything else, and the disagreement surfaces as a
+  production deserialization failure rather than a compile error.
+- 36 tests: round-trip for every type through the `Event` interface, byte-stability across repeated
+  round trips, timestamp and duration formats, null omission, forward compatibility, and the
+  constraint set.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| Jackson **3** (`tools.jackson`) | Jackson 2 (`com.fasterxml.jackson`), which the module already had | Spring Boot 4 auto-configures Jackson 3; Jackson 2 is only a compatibility path. The annotations are shared between both versions, so a model annotated for 2 and read by 3 compiles, runs, and silently ignores half the configuration. Worst kind of mismatch |
+| `raw` is a `String` | A parsed JSON tree (`JsonNode`) | EDI 214 is not JSON — it is `~`-terminated segments of `*`-delimited text. A field that can only hold JSON cannot hold a quarter of the platform's input |
+| `StatusEvent` is closed and typed | A `Map<String, Object>` attribute bag for whatever else a source sent | A map is untyped at compile time, round-trips lossily (a `Long` that fits in an `int` returns an `Integer`), and turns every consumer into string literals and casts. Anything unmodelled is already preserved verbatim in `raw` — the escape hatch exists once and does not need a worse second one |
+| `StatusCode` holds no EDI 214 codes | Recording `AF`/`X1`/`D1` on the enum so the mapping lives in one place | The canonical model would then know about one of its four sources, and the next feed with a different vocabulary either distorts the enum or does not fit it. That table belongs in the EDI normalizer |
+| `shipmentId` and `vehicleId` required on every source event | Nullable until enrichment fills them in | The shipment id is the Kafka partition key, and per-shipment ordering is the platform's one ordering guarantee. Identity resolution therefore happens *before* the envelope is constructed; an event that cannot be resolved is not representable and goes to the DLQ |
+| Unknown JSON properties ignored | Fail on unknown properties | Within a topic version a producer must be able to add a field without every consumer being redeployed first, or no service can be deployed independently and separate consumers buy nothing. Adding a field stays compatible; removing or retyping one is a new topic version |
+| Timestamps and durations as ISO-8601 strings | Epoch numbers | Epoch numbers lose sub-millisecond precision to floating point, are unreadable on a console consumer, and are ambiguous between seconds and milliseconds — which reliably puts events in 1970 or the year 57000. `PT47M13S` also states its own units; `2833` does not |
+| `Duration dwell` computed on `ShipmentDeparted` | Let consumers subtract the arrival themselves | Detention time is billable. It should have exactly one definition, not one per consumer |
+| Hibernate Validator only at test scope, with `ParameterMessageInterpolator` | Adding an EL implementation as a dependency | Keeps `libs/events` depending on `jakarta.validation-api` alone — the interfaces — so it imposes no validation implementation on its users. The EL-free interpolator handles the `{min}`/`{max}` substitution these constraints use |
+
+**Surprises**
+
+- **Spring Boot 4.1.1 manages two Jacksons at once.** The BOM carries `jackson-2-bom.version`
+  (2.21.5, `com.fasterxml.jackson`) alongside `jackson-bom.version` (3.1.5, `tools.jackson`). The
+  naming is the tell: Jackson 2 got the explicit `-2` suffix and a `spring-boot-jackson2`
+  compatibility module, so the unsuffixed one is the default. The module had been written against
+  the wrong one.
+- **Jackson 3 moved date handling out of `SerializationFeature`.** `WRITE_DATES_AS_TIMESTAMPS` and
+  `WRITE_DURATIONS_AS_TIMESTAMPS` no longer exist there; they are on a new `DateTimeFeature` enum.
+  `serializationInclusion(...)` is likewise gone, replaced by `changeDefaultPropertyInclusion` taking
+  a `UnaryOperator`. Both were found by decompiling the jar rather than by recall.
+- **`jackson-datatype-jsr310` is obsolete on Jackson 3** — `java.time` support is built into
+  databind as `tools.jackson.databind.ext.javatime`. One dependency removed.
+- **Hibernate Validator 9 pulls no EL implementation**, and the Spring Boot BOM does not manage one,
+  so `Validation.buildDefaultValidatorFactory()` would have failed at test time.
+- **A parameterized test over a hand-written fixture list is a trap.** It proves things about the
+  cases someone remembered, so "every event type round-trips" decays to "every event type someone
+  wrote down" the first time the model grows. `Class.getPermittedSubclasses()` turns the sealed
+  hierarchy into a runtime membership list, so the coverage test asks the model what exists instead
+  of being told. The sealing bought exhaustiveness twice — once at compile time, once at test time.
+
+**Left open**
+
+- No integration tests yet (`*IT`); Failsafe reports "No tests to run". First one arrives in S6,
+  when there is a Kafka to test against.
+- Sample payloads are inline in `EventFixtures` rather than in `docs/samples/`. They move out and
+  become shared contract fixtures in S5, once the simulator emits the real thing.
+
+---
+
 ## Next up
 
-**S2 — Canonical event model.** Build out `libs/events`: `PositionEvent`, `StatusEvent`, and the
-five derived events, with Jackson serialization, Bean Validation constraints, and the `raw`
-passthrough field. Exit criterion is lossless round-trip serialization for every event type.
+**S3 — Kafka and MongoDB in Kind.** Deploy a single-broker Kafka in KRaft mode and a MongoDB
+instance into the local cluster, exposed on host ports 19092 and 37017. Exit criteria are the two
+remaining M0 gates: a message round-tripping through Kafka from the host with the console tools,
+and a document round-tripping through Mongo with `mongosh`. Creating the position time-series
+collection belongs to S9, not here.
 
-Needs no external input — can start immediately.
+Needs the Kind cluster running (`./scripts/cluster-start.sh`) and the Docker VM to have room —
+`preflight.sh` currently warns that it is below the 10-12 GB the full stack targets, and S3 is the
+first session where that warning has teeth.
