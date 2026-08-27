@@ -16,17 +16,27 @@
   <description>Canonical event model shared by every service</description>
 
   <dependencies>
+    <!-- Jackson 3 (group tools.jackson), which is what Spring Boot 4 auto-configures.
+         Jackson 2 (com.fasterxml.jackson) is also managed by the BOM as a compatibility
+         path, but a model annotated for 2 would be ignored by the services' mapper.
+         java.time support is built into databind 3 - no jackson-datatype-jsr310. -->
     <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
+      <groupId>tools.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
     </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.datatype</groupId>
-      <artifactId>jackson-datatype-jsr310</artifactId>
-    </dependency>
+
+    <!-- Constraints are declared here; the implementation is the caller's choice.
+         Services get Hibernate Validator from spring-boot-starter-validation. -->
     <dependency>
       <groupId>jakarta.validation</groupId>
       <artifactId>jakarta.validation-api</artifactId>
+    </dependency>
+
+    <!-- Test-scope only: needed to actually run the constraints in this module's tests. -->
+    <dependency>
+      <groupId>org.hibernate.validator</groupId>
+      <artifactId>hibernate-validator</artifactId>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 </project>
