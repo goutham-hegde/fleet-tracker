@@ -333,7 +333,7 @@ on it.
 
 ## S3 — Kafka and MongoDB in Kind
 
-**2026-08-28 · M0 · commit `PLACEHOLDER`**
+**2026-08-28 · M0 · commit `1e41d0b`**
 
 Deployed the two stateful dependencies the rest of the platform is written against, and closed the
 last two M0 gates. **M0 is complete**: the platform exists, is reachable from the host, and data
