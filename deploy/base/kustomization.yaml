@@ -1,0 +1,10 @@
+# The platform layer: the two stateful dependencies every service needs.
+# Application services join this list from M2 onward, and the local overlay
+# that M6 requires (`kubectl apply -k deploy/overlays/local`) will build on it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet
+resources:
+  - namespace.yaml
+  - kafka
+  - mongodb

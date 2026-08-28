@@ -1,0 +1,6 @@
+# Everything this platform owns lives in one namespace, so `kubectl delete
+# namespace fleet` is a complete teardown and nothing leaks into kube-system.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleet

@@ -4,7 +4,7 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** in development — milestone M0 of M9, session 1 of 24.
+> **Status:** in development — milestone M0 of M9, session 3 of 24.
 > See **[PROGRESS.md](PROGRESS.md)** for the build log, decisions taken, and what is next.
 > Architecture decision records land in `docs/adr/` as they are written.
 
@@ -72,6 +72,58 @@ by accident:
 | Kafka | `localhost:19092` |
 | MongoDB (cluster) | `mongodb://localhost:37017` |
 
+## Platform
+
+Kafka and MongoDB run inside the cluster, in the `fleet` namespace.
+
+```bash
+./scripts/platform-up.sh    # deploy Kafka + MongoDB + the canonical topics (idempotent)
+./scripts/smoke.sh          # prove both are reachable from the host and round-trip data
+./scripts/platform-down.sh  # delete the namespace -- DESTROYS all Kafka and Mongo data
+```
+
+`platform-up.sh` is a wrapper around `kubectl apply -k deploy/base` that also waits for both
+readiness probes and for the topic-creation Job. Kafka and MongoDB together add roughly **625 MB**
+on top of the idle cluster.
+
+To free memory between sessions use `cluster-stop.sh`, not `platform-down.sh` — stopping the
+cluster keeps the volumes, deleting the namespace does not.
+
+### Topics
+
+Created by a Job, never auto-created. Partition count is effectively permanent: it can be raised
+but never lowered, and raising it changes which partition a key hashes to — which would break the
+per-shipment ordering the design depends on.
+
+| Topic | Partitions | Carries |
+|---|---|---|
+| `position.events.v1` | 12 | Every normalized position ping. The high-volume topic. |
+| `shipment.derived.v1` | 6 | Arrivals, departures, ETA updates. |
+| `status.events.v1` | 3 | Status changes — per stop, not per second. |
+| `exceptions.v1` | 3 | SLA exceptions raised and cleared. |
+
+All topics are keyed by `shipmentId`, which is what guarantees per-shipment ordering without
+paying for global ordering.
+
+### Addresses
+
+| From | Kafka | MongoDB |
+|---|---|---|
+| Inside the cluster | `kafka.fleet.svc.cluster.local:9092` | `mongodb.fleet.svc.cluster.local:27017` |
+| From the host | `localhost:19092` | `mongodb://localhost:37017` |
+
+Kafka advertises a different address on each listener because the two callers cannot use the same
+one: a pod resolving `localhost` would find itself, and the host cannot resolve a `.svc` name at
+all.
+
+Kafka's console tools are not installed system-wide. `scripts/kafka-cli.sh` downloads the
+distribution into a gitignored `.tools/` on first use and runs any tool from it:
+
+```bash
+./scripts/kafka-cli.sh kafka-topics.sh --bootstrap-server localhost:19092 --describe
+./scripts/kafka-cli.sh kafka-console-consumer.sh --bootstrap-server localhost:19092     --topic position.events.v1 --from-beginning
+```
+
 ## Prerequisites
 
 | Tool | Purpose |
@@ -83,6 +135,7 @@ by accident:
 | helm | Chart installs. `winget install Helm.Helm` |
 | terraform | AWS free-tier stack (M8). `winget install Hashicorp.Terraform` |
 | aws | AWS CLI (M8). `winget install Amazon.AWSCLI` |
+| mongosh | MongoDB shell, for inspecting the database by hand. `winget install MongoDB.Shell` |
 | Node 20+ | Dashboard. |
 
 `winget` updates the *user* PATH, which existing shells do not see until they

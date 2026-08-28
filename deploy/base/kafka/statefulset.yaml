@@ -1,0 +1,78 @@
+# A StatefulSet, not a Deployment. Kafka's log directory is its database: the
+# broker's identity, its topic partitions and every unread message live on the
+# volume. A Deployment gives pods random names and a shared or ephemeral
+# volume; a StatefulSet gives kafka-0 the same name and the same PVC on every
+# restart, which is what makes the data survive.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: kafka
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+    spec:
+      securityContext:
+        # The apache/kafka image runs as uid 1000. The local-path provisioner
+        # creates the volume owned by root, so without fsGroup the broker
+        # cannot write its own log directory and dies on startup.
+        fsGroup: 1000
+      containers:
+        - name: kafka
+          image: apache/kafka:4.3.1
+          envFrom:
+            - configMapRef:
+                name: kafka-config
+          ports:
+            - name: internal
+              containerPort: 9092
+            - name: controller
+              containerPort: 9093
+            - name: external
+              containerPort: 9094
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+          resources:
+            requests:
+              memory: 768Mi
+              cpu: 200m
+            limits:
+              memory: 1Gi
+          # A TCP check on 9092 only proves the port is bound. Listing topics
+          # over the same client protocol the services use proves the broker
+          # has actually finished loading metadata and will answer requests.
+          readinessProbe:
+            exec:
+              command:
+                - /opt/kafka/bin/kafka-topics.sh
+                - --bootstrap-server
+                - localhost:9092
+                - --list
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 45
+            periodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 5Gi

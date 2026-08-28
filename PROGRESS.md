@@ -3,12 +3,12 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-08-27 · **Current position:** M0 Walking Skeleton, session S2 of 24 complete
+**Last updated:** 2026-08-28 · **Current position:** M0 Walking Skeleton **complete**, session S3 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
-M0 ███████░░░  2/3 sessions    ← current
-M1 ░░░░░░░░░░  0/2
+M0 ██████████  3/3 sessions    complete
+M1 ░░░░░░░░░░  0/2              ← current
 M2 ░░░░░░░░░░  0/3
 M3 ░░░░░░░░░░  0/3
 M4 ░░░░░░░░░░  0/2
@@ -17,7 +17,7 @@ M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                2/24 sessions
+                3/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -27,18 +27,19 @@ pass. Sessions are roughly 3-4 hours and each ends at a committable checkpoint.
 
 ## M0 — Walking Skeleton
 
-**Capability:** the local platform exists and is reachable. Empty, but real.
+**Capability:** the local platform exists and is reachable. Empty, but real. **All five exit
+criteria pass as of 2026-08-28; M1 is unblocked.**
 
 - [x] **S1** — Tooling and repo skeleton
 - [x] **S2** — Canonical event model
-- [ ] **S3** — Kafka and MongoDB in Kind
+- [x] **S3** — Kafka and MongoDB in Kind
 
 **Exit criteria**
 
 - [x] `./mvnw verify` green on the aggregate build
 - [x] `kubectl get nodes` shows a Ready node
-- [ ] A message round-trips through Kafka via console tools from the host
-- [ ] A document round-trips through Mongo via `mongosh` from the host
+- [x] A message round-trips through Kafka via console tools from the host
+- [x] A document round-trips through Mongo via `mongosh` from the host
 - [x] Every event type serializes and deserializes losslessly under test
 
 ---
@@ -330,14 +331,103 @@ on it.
 
 ---
 
+## S3 — Kafka and MongoDB in Kind
+
+**2026-08-28 · M0 · commit `PLACEHOLDER`**
+
+Deployed the two stateful dependencies the rest of the platform is written against, and closed the
+last two M0 gates. **M0 is complete**: the platform exists, is reachable from the host, and data
+round-trips through both stores.
+
+**Built**
+
+- `deploy/base/` as a kustomize base — namespace `fleet`, plus a `kafka/` and a `mongodb/`
+  directory. This is the layout M6's `kubectl apply -k deploy/overlays/local` will build on, so it
+  was cheaper to start there than to restructure later.
+- **Kafka 4.3.1** in KRaft mode as a single-replica StatefulSet on a 5 Gi volume, configured
+  entirely through environment variables (the `apache/kafka` image maps `KAFKA_FOO_BAR` onto the
+  `foo.bar` broker property, so there is no `server.properties` to maintain). Three listeners:
+  `INTERNAL` for in-cluster clients, `EXTERNAL` for the Windows host, `CONTROLLER` for the raft
+  quorum talking to itself.
+- **MongoDB 8.0.29** as a StatefulSet on a 5 Gi volume, with an explicit WiredTiger cache cap.
+- A **Job that creates the four canonical topics** with deliberate partition counts:
+  `position.events.v1` 12, `shipment.derived.v1` 6, `status.events.v1` 3, `exceptions.v1` 3.
+- Four scripts: `platform-up.sh` (apply and wait for both readiness probes and the Job),
+  `platform-down.sh`, `smoke.sh` (host-side round trip through both stores), and `kafka-cli.sh`,
+  which downloads the Kafka distribution into a gitignored `.tools/` on first use so the console
+  tools are available on a machine that has no Kafka installed.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| MongoDB **8.0.29**, the production release line | 8.3.8, the newest tag on Docker Hub | MongoDB ships "rapid releases" (8.1/8.2/8.3) that it explicitly does not support for production. Unlike the Spring Boot 4.1.1 choice in S1, newest here is a *weaker* signal, not a stronger one |
+| Kafka **4.3.1**, latest GA | 3.9.x | 4.x is KRaft-only. Staying on 3.x would mean either ZooKeeper or a migration path nobody asked for |
+| Topic **auto-creation off**, topics created by a Job | Let producers auto-create on first use | Auto-creation silently accepts a typo and gives the new topic the default partition count. `position.event.v1` would quietly appear with 1 partition instead of 12 — the throughput and ordering story destroyed by a missing `s`, with no error anywhere |
+| **StatefulSet**, not Deployment | Deployment with a PVC | Kafka's log directory *is* its database — broker identity, partitions, and every unread message. A StatefulSet is what guarantees `kafka-0` gets the same name and the same volume back after a restart |
+| **Explicit partition counts per topic** | One default for all | Partition count is the ceiling on consumer parallelism, can be raised but never lowered, and raising it changes which partition a key hashes to — so a shipment's new events would land away from its own history and break per-shipment ordering. Too permanent to inherit from a default |
+| **NodePort** services on fixed ports | `kubectl port-forward` | Port-forward is a foreground process that dies with its terminal and has to be re-run per session. The NodePorts pair with the port mappings already baked into the Kind cluster config |
+| **`publishNotReadyAddresses: true`** on the headless services | Leave the default | Not a preference — Kafka cannot start without it. See surprises |
+| **No authentication on MongoDB locally** | Root credentials in a Secret | The database is reachable only from this laptop, and credentials here would buy the appearance of security rather than the thing. Real IAM is an M8 deliverable against real cloud resources |
+| Kafka retention **24 hours** | The 7-day default | This is a laptop. The M1 simulator at full rate would fill the disk |
+| Kafka CLI downloaded into a gitignored `.tools/` | Commit it, or install system-wide | A 100 MB tarball does not belong in the repository, and a system-wide install is an undocumented prerequisite for anyone cloning this |
+
+**Surprises**
+
+- **Kafka deadlocked on its own readiness probe.** The broker logged `Kafka Server started` and then
+  sat at `0/1` indefinitely while the topic Job retried for four minutes. The probe connects to
+  `localhost:9092`, and Kafka's reply to any bootstrap is *"reconnect to me at my advertised
+  address"* — `kafka.fleet.svc.cluster.local:9092`. But a Service publishes only the endpoints of
+  **ready** pods, so that DNS name did not resolve until the probe passed, and the probe could not
+  pass until the name resolved. `publishNotReadyAddresses: true` breaks the cycle. The general
+  shape: any readiness probe that travels through the service's own DNS name is a candidate for
+  this, and it presents as a healthy process that never goes ready.
+- **Git Bash rewrote a path meant for a Linux container.** `kubectl exec ... /opt/kafka/bin/kafka-topics.sh`
+  failed with `stat C:/Program Files/Git/opt/kafka/bin/kafka-topics.sh: no such file or directory`.
+  MSYS converts anything shaped like a Unix absolute path into a Windows one before the process
+  sees it. `MSYS_NO_PATHCONV=1` disables it. Same class of problem as the `$LOCALAPPDATA`
+  conversion in S1, in the opposite direction.
+- **Kafka's console tools emit a log4j stack trace on every invocation under Git Bash.** The
+  launcher passes `-Dlog4j2.configurationFile=<path>`, which resolves to `G:/...`; log4j parses a
+  path containing a colon as a URI and fails with `unknown protocol: g`. Harmless but it buries the
+  actual output. `kafka-cli.sh` passes a proper `file:///` URI instead.
+- **The `mongod` already on this machine is server-only** — no `mongosh`. Installed
+  `MongoDB.Shell` 2.9.2 via winget and added its directory to `scripts/lib.sh`, since winget
+  updates the user PATH that running shells never see.
+- **A Job's pod template is immutable.** Re-applying a changed `kafka-topics` Job fails with a
+  field-is-immutable error, so `platform-up.sh` deletes the Job before applying. Re-running the
+  topic creation is safe because every `kafka-topics.sh --create` carries `--if-not-exists`.
+
+**Measured**
+
+Kafka and MongoDB together add roughly **625 MB** to the cluster — 1.29 GB total against ~660 MB
+for an idle cluster with nothing deployed. Comfortable inside the 7.6 GB the Docker VM currently
+has, which means the memory warning from `preflight.sh` still has no teeth until the JVM services
+arrive in M2.
+
+**Left open**
+
+- The Docker VM is at 7.6 GB against the 10-12 GB the full stack targets. Not yet a problem, and
+  now measured rather than assumed.
+- No `deploy/overlays/` yet — only the base. The overlay structure is an M6 deliverable and there
+  is nothing to differentiate between environments until then.
+- MongoDB has no authentication and no replica set, so no transactions and no change streams. Both
+  are deliberate for a local single-node store; if change streams turn out to be wanted in M3, a
+  single-node replica set is the smallest change that provides them.
+
+---
+
 ## Next up
 
-**S3 — Kafka and MongoDB in Kind.** Deploy a single-broker Kafka in KRaft mode and a MongoDB
-instance into the local cluster, exposed on host ports 19092 and 37017. Exit criteria are the two
-remaining M0 gates: a message round-tripping through Kafka from the host with the console tools,
-and a document round-tripping through Mongo with `mongosh`. Creating the position time-series
-collection belongs to S9, not here.
+**S4 — Simulator core.** M1 starts: `tools/fleet-simulator`, a Spring Boot application that drives
+synthetic trucks along multi-stop routes with plausible movement physics — speed, heading,
+acceleration, and stops that actually dwell. Routes and the tick loop come first; the four wire
+formats and fault injection are S5.
 
-Needs the Kind cluster running (`./scripts/cluster-start.sh`) and the Docker VM to have room —
-`preflight.sh` currently warns that it is below the 10-12 GB the full stack targets, and S3 is the
-first session where that warning has teeth.
+The simulator is built *before* the services that consume it, deliberately: nothing downstream is
+testable or demoable without a data source, and a fake source that emits the four real shapes is
+what lets M2 be written against fixtures rather than against hope.
+
+Register the new module in the root `pom.xml` `<modules>` list — an unregistered directory is
+silently skipped by the build. Nothing in the cluster is needed for S4; the simulator writes to
+Kafka only from S6 onward.

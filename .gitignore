@@ -53,6 +53,9 @@ logs/
 surefire-reports/
 failsafe-reports/
 
+# --- Downloaded CLI tools (fetched by scripts/kafka-cli.sh, never committed) ---
+.tools/
+
 # --- Local-only working notes (deliberately not published) ---
 CLAUDE.md
 LEARNING.md

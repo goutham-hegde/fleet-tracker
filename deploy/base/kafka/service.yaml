@@ -1,0 +1,51 @@
+# In-cluster address. clusterIP: None makes this a *headless* service: DNS for
+# kafka.fleet.svc.cluster.local returns the pod IP directly instead of a load
+# balancer address. That matters for Kafka specifically -- a client bootstraps
+# once, is handed the advertised address of each broker, and must then connect
+# to that exact broker to reach a given partition leader. A load-balancing
+# service in front of a multi-broker cluster would scatter those connections.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: kafka
+spec:
+  clusterIP: None
+  # Without this, the broker can never start. A Service publishes only *ready*
+  # endpoints, so kafka.fleet.svc.cluster.local does not resolve until the pod
+  # passes its readiness probe -- but the probe bootstraps on localhost:9092,
+  # is handed the advertised address kafka.fleet.svc.cluster.local:9092, and
+  # has to resolve it to finish. Probe waits on DNS, DNS waits on probe.
+  # Publishing not-ready addresses breaks the cycle, which is why StatefulSet
+  # headless services almost always set it.
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: internal
+      port: 9092
+      targetPort: 9092
+---
+# External address, reachable from Windows as localhost:19092.
+#
+# The chain: Kind's cluster config maps host port 19092 to container port 30092
+# on the node, and a NodePort service listens on 30092 on every node and
+# forwards to the pod's 9094. Three hops, one for each boundary crossed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-external
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: kafka
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: external
+      port: 9094
+      targetPort: 9094
+      nodePort: 30092

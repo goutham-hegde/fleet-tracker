@@ -1,0 +1,72 @@
+# Kafka broker configuration, as environment variables.
+#
+# The apache/kafka image translates any KAFKA_* variable into the equivalent
+# server.properties key: lowercase it, turn underscores into dots. So
+# KAFKA_NUM_PARTITIONS becomes num.partitions. There is no properties file to
+# maintain, which is why the whole broker configuration fits in a ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+  namespace: fleet
+data:
+  # --- KRaft identity -------------------------------------------------------
+  # KRaft replaces ZooKeeper: the brokers themselves elect a controller quorum
+  # and store cluster metadata in an internal Kafka topic. One node plays both
+  # roles here, which is why process.roles carries both values.
+  KAFKA_NODE_ID: "1"
+  KAFKA_PROCESS_ROLES: "broker,controller"
+  # "<node id>@<host>:<port>" for every controller. Single node, so localhost:
+  # this avoids a chicken-and-egg dependency on cluster DNS at startup.
+  KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
+  KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+  # A fixed cluster id makes `kafka-storage format` idempotent across restarts.
+  # Generated once; changing it orphans the data on the existing volume.
+  CLUSTER_ID: "L0DA3XuUTX29kwbpR7O3SQ"
+
+  # --- Listeners ------------------------------------------------------------
+  # Three listeners, because clients reach this broker by two different names
+  # and the controller traffic must not share a port with either.
+  #
+  #   INTERNAL   9092  in-cluster pods -> kafka.fleet.svc.cluster.local:9092
+  #   CONTROLLER 9093  the broker talking to its own controller quorum
+  #   EXTERNAL   9094  the Windows host -> localhost:19092 (NodePort 30092)
+  #
+  # advertised.listeners is the address a client is *told* to reconnect on
+  # after the initial bootstrap, and it is per-listener. A pod resolving
+  # "localhost" would find itself, and the host cannot resolve a .svc name at
+  # all, so a single shared address cannot serve both.
+  KAFKA_LISTENERS: "INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094"
+  KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka.fleet.svc.cluster.local:9092,EXTERNAL://localhost:19092"
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
+  KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+
+  # --- Single-broker realities ---------------------------------------------
+  # Kafka's internal topics default to replication factor 3. With one broker
+  # that is unsatisfiable and the first consumer group to commit an offset
+  # fails, so these are lowered deliberately rather than by accident.
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+  KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: "1"
+  KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+  KAFKA_MIN_INSYNC_REPLICAS: "1"
+  # Default is 3000ms of deliberate delay so a starting group's members arrive
+  # together. Locally it just makes every test wait three seconds.
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+
+  # --- Topic policy ---------------------------------------------------------
+  # Auto-creation OFF. It would silently create any misspelled topic with the
+  # default partition count, which for position.events.v1 means 1 partition
+  # instead of 12 -- destroying the throughput story while looking like it
+  # works. Topics are created explicitly by the kafka-topics Job.
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  # 24 hours of retention. This is a laptop; the default of 7 days would let
+  # the simulator fill the disk during M1.
+  KAFKA_LOG_RETENTION_HOURS: "24"
+
+  KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+  # 512m heap inside a 1Gi limit. Kafka is unusual on the JVM in that most of
+  # its memory is *outside* the heap -- the page cache does the real work -- so
+  # a large heap would be wasted here.
+  KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"

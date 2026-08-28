@@ -1,0 +1,70 @@
+# Creates the canonical topics.
+#
+# Why a Job rather than letting the brokers auto-create topics on first use:
+# partition count is chosen per topic and is effectively permanent. It can be
+# raised but never lowered, and raising it changes which partition a given key
+# hashes to -- so a shipment's events would start landing in a different
+# partition from its own history, silently breaking the per-shipment ordering
+# guarantee the whole design rests on. A number that important is not something
+# to inherit from a default.
+#
+# --if-not-exists makes the Job idempotent, so re-running it on an existing
+# cluster is a no-op rather than an error.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics
+  namespace: fleet
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-topics
+          image: apache/kafka:4.3.1
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              BS=kafka.fleet.svc.cluster.local:9092
+
+              # The Job can be scheduled before the broker is accepting
+              # connections, so wait rather than fail and rely on a restart.
+              for i in $(seq 1 60); do
+                if /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BS" --list >/dev/null 2>&1; then
+                  break
+                fi
+                echo "waiting for kafka ($i)"; sleep 2
+              done
+
+              create() {
+                echo "topic $1 (partitions=$2)"
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BS" \
+                  --create --if-not-exists --topic "$1" \
+                  --partitions "$2" --replication-factor 1
+              }
+
+              # 12 partitions: the high-volume topic. Every telematics ping in
+              # the fleet lands here, and 12 is the ceiling on how many
+              # tracking-processor pods can share the work.
+              create position.events.v1   12
+              # Status changes are per-stop, not per-second -- orders of
+              # magnitude fewer events, so fewer partitions.
+              create status.events.v1      3
+              # Conclusions this platform reaches: arrivals, departures, ETAs.
+              # Bounded by stops, not by GPS frequency.
+              create shipment.derived.v1   6
+              # SLA exceptions. Rare by definition; if this topic is busy the
+              # fleet is on fire.
+              create exceptions.v1         3
+
+              echo "--- topics now on the cluster ---"
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BS" --list
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
