@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: fleet-simulator
+  main:
+    # Nothing here serves HTTP yet. Without this Boot 4 would still start a web server if a
+    # servlet container ever arrived transitively, and a simulator listening on a port it does
+    # not use is a port conflict waiting to happen on a machine where 8080 is already taken.
+    web-application-type: none
+
+fleet:
+  simulator:
+    # Real time between ticks.
+    tick-interval: 1s
+    # Simulated seconds per real second. 1.0 is real time, which is what a live map demo wants.
+    # Raise it to compress a twelve-hour lane into minutes for a soak test.
+    time-scale: 1.0
+    # Trucks, spread round-robin across the four lanes.
+    trucks: 8
+    # Master seed. The same seed replays the same run exactly.
+    seed: 20260829
+    # Replace a truck with a fresh one when it finishes, so a demo never runs dry.
+    repeat-routes: true
+    auto-start: true
+
+logging:
+  level:
+    com.fleettracking.simulator: INFO
+  pattern:
+    console: "%d{HH:mm:ss} %-5level %logger{0} - %msg%n"

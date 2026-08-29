@@ -124,6 +124,43 @@ distribution into a gitignored `.tools/` on first use and runs any tool from it:
 ./scripts/kafka-cli.sh kafka-console-consumer.sh --bootstrap-server localhost:19092     --topic position.events.v1 --from-beginning
 ```
 
+## Simulator
+
+The synthetic fleet. It drives trucks along four real freight lanes with plausible movement
+physics, and it needs nothing else running — no cluster, no Kafka, no MongoDB.
+
+```bash
+./mvnw -pl tools/fleet-simulator -am package
+java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar
+```
+
+| Setting | Default | What it does |
+|---|---|---|
+| `fleet.simulator.tick-interval` | `1s` | Real time between ticks |
+| `fleet.simulator.time-scale` | `1.0` | Simulated seconds per real second. `1.0` is real time; raise it to compress a twelve-hour lane into minutes |
+| `fleet.simulator.trucks` | `8` | Trucks, spread round-robin across the lanes |
+| `fleet.simulator.seed` | `20260829` | Master seed. The same seed replays the same run exactly |
+| `fleet.simulator.repeat-routes` | `true` | Replace a truck with a fresh one when it finishes, so a demo never runs dry |
+
+Time scale and tick interval are independent knobs: the tick interval sets how *often* events
+happen, the time scale sets how much ground each tick covers. To watch four trucks run their whole
+routes to completion in about two minutes:
+
+```bash
+java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar \
+  --fleet.simulator.time-scale=3000 \
+  --fleet.simulator.tick-interval=5ms \
+  --fleet.simulator.trucks=4 \
+  --fleet.simulator.repeat-routes=false
+```
+
+Lanes are Chicago→Dallas (long-haul), Los Angeles→Denver (refrigerated), Atlanta→Columbus
+(multi-stop LTL) and Houston→Laredo (border drayage). They differ in shape on purpose — leg
+lengths, stop counts and dwell patterns are all different, so a bug cannot hide behind uniformity.
+
+As of S4 the only output is the log. The four source wire formats and fault injection arrive in S5,
+and the events reach Kafka from S6.
+
 ## Prerequisites
 
 | Tool | Purpose |
