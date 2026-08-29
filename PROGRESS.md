@@ -3,12 +3,12 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-08-28 · **Current position:** M0 Walking Skeleton **complete**, session S3 of 24
+**Last updated:** 2026-08-29 · **Current position:** M1 Synthetic Fleet under way, session S4 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
-M1 ░░░░░░░░░░  0/2              ← current
+M1 █████░░░░░  1/2              ← current
 M2 ░░░░░░░░░░  0/3
 M3 ░░░░░░░░░░  0/3
 M4 ░░░░░░░░░░  0/2
@@ -17,7 +17,7 @@ M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                3/24 sessions
+                4/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -48,12 +48,12 @@ criteria pass as of 2026-08-28; M1 is unblocked.**
 
 **Capability:** realistic, multi-format event data on demand. De-risks everything downstream.
 
-- [ ] **S4** — Simulator core: routes, movement physics, tick loop
+- [x] **S4** — Simulator core: routes, movement physics, tick loop
 - [ ] **S5** — Four source formats + fault injection
 
 **Exit criteria**
 
-- [ ] A simulated truck traverses a multi-stop route with plausible physics (unit-tested)
+- [x] A simulated truck traverses a multi-stop route with plausible physics (unit-tested)
 - [ ] All four source formats emit correctly at a configurable rate
 - [ ] Each fault type can be switched on and is visible in the output
 - [ ] Sample payloads captured to `docs/samples/` as contract-test fixtures
@@ -417,17 +417,97 @@ arrive in M2.
 
 ---
 
+## S4 — Simulator core
+
+**2026-08-29 · M1 · commit `b631e15`**
+
+M1 opens with `tools/fleet-simulator`: a Spring Boot application that drives synthetic trucks along
+real freight lanes with movement physics that hold up under inspection. Nothing in the cluster is
+involved — no Kafka, no MongoDB, no Kubernetes. This is the data source everything downstream will
+be written and tested against, which is why it is built before the services that consume it.
+
+**Built**
+
+- **Geodesic maths** (`route/Geo`) — great-circle distance, initial bearing, and the direct
+  geodesic that moves a truck a given distance on a given heading. Haversine on a mean-radius
+  sphere rather than an ellipsoidal solver.
+- **Route model** — `Stop` (location, city/state, geofence radius, dwell, kind), `Leg`, and
+  `Route`, which derives its legs and knows both its straight-line and its road-corrected length.
+- **Four real lanes** (`route/Lanes`) — Chicago→Dallas long-haul, LA→Denver cold chain,
+  Atlanta→Columbus multi-stop LTL, and a Houston→Laredo drayage shuttle. Deliberately different
+  shapes, so a bug cannot hide behind uniformity.
+- **The movement model** (`fleet/Truck`) — a three-phase state machine (driving, dwelling,
+  completed) advanced one tick at a time, with acceleration and braking limits, a mean-reverting
+  wander on cruise speed, reefer temperature drift, and a monotonic odometer. Arrivals and
+  departures come out as typed `TruckTransition`s: the ground truth M3's geofencing will later have
+  to rediscover from noisy positions alone.
+- **The fleet and tick loop** — `Simulation` (plain Java, no Spring) holding the trucks and their
+  shared simulated clock, and `SimulationRunner`, a `SmartLifecycle` that steps it on a schedule.
+- **`TickObserver`** — the seam S5's four wire-format emitters and S6's Kafka producer plug into.
+  S4 ships one implementation, which logs.
+- **54 unit tests** in the module, on top of the 36 in `libs/events`.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| Straight great-circle legs between stops | Road-snapped geometry from a routing engine (OSRM, or a paid API) | A routing service is a network dependency and another container, and nothing downstream can tell the difference: geofencing, ETA and dedup are all tested by the *timing* of positions, not by whether the truck followed the actual I-55. Routes are plain data, so real polylines remain a fixture change rather than a code change |
+| Drive the short line, but bill speed and odometer against the longer road (`ROAD_CIRCUITY = 1.18`) | Drive the straight line at full speed | Getting this wrong in the optimistic direction is the worst outcome available: every ETA the platform computes in M3 would look excellent, because the trucks would be cheating in exactly the way a naive ETA assumes they can. Real roads run 15-25% longer than the straight line |
+| Haversine on a sphere | Vincenty or Karney on the WGS-84 ellipsoid | The ellipsoid is accurate to millimetres; haversine is off by up to 0.5%, around 5 m per kilometre. GPS is routinely worse than that, and the geofence thresholds this feeds are tens of metres wide. The exact solver also needs an iterative loop that can fail to converge |
+| The simulation keeps its own clock | Stamp events with `Instant.now()` | Time compression is the point of `time-scale`. At 60× the trucks cover an hour of ground per real minute; wall-clock stamps would describe that hour as a minute and imply speeds of 6 000 km/h to anything computing speed from timestamps |
+| Braking derived from `v² = 2as` | An explicit "am I nearly there yet" distance check | The stopping-distance formula *is* the deceleration curve. Taking the lesser of it and the driver's desired speed produces a smooth approach that begins on its own about 480 m out at 100 km/h, with no branch anywhere that says "start braking" |
+| One seeded generator per truck, derived from a master seed | One shared generator for the fleet | A shared generator makes a truck's behaviour depend on how many other trucks happen to be running, so a run with 8 trucks produces a different truck #1 than a run with 4. Per-truck seeds make a run reproducible *and* stable under fleet resizing |
+| `scheduleWithFixedDelay` | `scheduleAtFixedRate` | If a tick ever overruns, fixed-rate scheduling fires the backlog back to back — a burst of events at precisely the moment the process is already struggling. Fixed delay just runs slower |
+| Lanes as Java constants | A YAML or JSON resource | They are test fixtures. A malformed lane should be a compile error, not a startup failure |
+
+**Surprises**
+
+- **The truck arrived at its first dock doing 21 km/h**, after braking flat out for thirty seconds.
+  The braking curve was computed from the distance remaining *now*, which lets the truck cross the
+  curve during the very step that discovers it — and once above the curve it can never get back,
+  because the excess speed consumes extra ground, which lowers the curve again. The error compounds
+  monotonically. Braking against the distance that will remain *after* the step fixes it: the truck
+  starts braking one tick early and then tracks the curve to within a centimetre per second. A
+  one-tick lookahead is the difference between a plausible model and an obviously broken one.
+- **The application ran exactly one tick and exited cleanly.** The tick thread was a daemon, and
+  with no web server there was nothing else holding the JVM open, so it was abandoned the moment
+  `main` returned. The logs showed a successful startup and a graceful shutdown, with no error at
+  all. Non-web Spring Boot applications need something non-daemon to stay alive.
+- **`spring-boot-maven-plugin` does not repackage unless the execution is declared.** The BOM is
+  imported rather than inherited (an S1 decision that keeps `libs/events` a plain library), and
+  that brings dependency versions but none of `spring-boot-starter-parent`'s plugin executions. The
+  jar built without complaint and failed at runtime with `no main manifest attribute`.
+- **A degree of longitude at 60°N is not exactly half a degree of arc.** The test asserting it was
+  0.53 m out — correctly. `cos(latitude)` gives the distance along the *parallel*, and a parallel is
+  not a great circle: the shortest path between two points at the same latitude bows toward the pole
+  and is slightly shorter. The assertion now also checks the sign of that difference, since being
+  long there would be a real bug.
+
+**Left open**
+
+- Every truck uses the same `DriverProfile`. Per-lane profiles — a mountain lane should not cruise
+  at the same speed as a flat interstate — are worth having but are not needed until there is
+  something measuring ETA accuracy.
+- No fault injection yet, and no wire formats. Both are S5, which is what makes the simulator
+  useful to M2 rather than merely correct.
+- Sample payloads are still not in `docs/samples/`; there is nothing to capture until S5 emits the
+  four real shapes.
+
+---
+
 ## Next up
 
-**S4 — Simulator core.** M1 starts: `tools/fleet-simulator`, a Spring Boot application that drives
-synthetic trucks along multi-stop routes with plausible movement physics — speed, heading,
-acceleration, and stops that actually dwell. Routes and the tick loop come first; the four wire
-formats and fault injection are S5.
+**S5 — Four source formats and fault injection.** M1 finishes by making the simulator emit the four
+real wire shapes rather than internal snapshots: nested telematics JSON in imperial units, terse and
+unreliable mobile-app JSON, EDI 214 segment text with no coordinates, and reefer readings that carry
+a temperature and a device id but no position and no shipment. Each arrives as a `TickObserver`, so
+the movement core does not change.
 
-The simulator is built *before* the services that consume it, deliberately: nothing downstream is
-testable or demoable without a data source, and a fake source that emits the four real shapes is
-what lets M2 be written against fixtures rather than against hope.
+Fault injection lands alongside them, because a feed that never misbehaves does not test anything
+M2 is built to survive: dropped messages, duplicates, out-of-order backlogs dumped after a
+connectivity gap, GPS noise and outright bad fixes, delayed EDI batches, and malformed payloads
+destined for the DLQ. Each fault switchable independently.
 
-Register the new module in the root `pom.xml` `<modules>` list — an unregistered directory is
-silently skipped by the build. Nothing in the cluster is needed for S4; the simulator writes to
-Kafka only from S6 onward.
+Captured samples of all four formats go to `docs/samples/` at the end of S5 and become the contract
+fixtures M2's normalizers are tested against — which is what lets the gateway be written before it
+has ever seen a live feed.
