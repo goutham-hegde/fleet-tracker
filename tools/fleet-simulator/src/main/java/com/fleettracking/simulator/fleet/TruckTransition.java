@@ -22,15 +22,41 @@ public sealed interface TruckTransition {
   /** When it happened, in simulated time. */
   Instant at();
 
+  /** The tractor this happened to. */
+  String vehicleId();
+
+  /**
+   * The load it was carrying.
+   *
+   * <p>Carried on the transition rather than looked up from the fleet because a transition is
+   * reported by feeds that know only one of the two identities: an EDI 214 status names the
+   * shipment and never the tractor, while a driver's phone is signed in against the load. Pairing
+   * a transition back to its truck after the fact would mean matching on timestamps, which is
+   * precisely the guesswork the ground truth exists to avoid.
+   */
+  String shipmentId();
+
+  /** The stop this concerns. */
+  Stop stop();
+
   /** The truck reached a stop and came to rest inside its geofence. */
-  record Arrived(Stop stop, Instant at) implements TruckTransition {}
+  record Arrived(String vehicleId, String shipmentId, Stop stop, Instant at)
+      implements TruckTransition {}
 
   /** The truck finished dwelling and pulled away from a stop. */
-  record Departed(Stop stop, Instant at) implements TruckTransition {}
+  record Departed(String vehicleId, String shipmentId, Stop stop, Instant at)
+      implements TruckTransition {}
 
   /**
    * The truck finished dwelling at the <em>final</em> stop and has nothing left to do. Distinct
    * from {@link Departed} because there is no next leg to depart onto.
    */
-  record RouteCompleted(Stop finalStop, Instant at) implements TruckTransition {}
+  record RouteCompleted(String vehicleId, String shipmentId, Stop stop, Instant at)
+      implements TruckTransition {
+
+    /** The last stop on the route, named for what it is at the point the route ends. */
+    public Stop finalStop() {
+      return stop;
+    }
+  }
 }

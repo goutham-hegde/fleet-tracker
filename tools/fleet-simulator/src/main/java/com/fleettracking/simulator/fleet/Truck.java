@@ -171,12 +171,12 @@ public final class Truck {
     if (cursor >= route.legs().size()) {
       // Dwell finished at the final stop: there is no leg to depart onto.
       phase = TruckPhase.COMPLETED;
-      transitions.add(new TruckTransition.RouteCompleted(stop, now));
+      transitions.add(new TruckTransition.RouteCompleted(vehicleId, shipmentId, stop, now));
       return;
     }
 
     phase = TruckPhase.DRIVING;
-    transitions.add(new TruckTransition.Departed(stop, now));
+    transitions.add(new TruckTransition.Departed(vehicleId, shipmentId, stop, now));
   }
 
   /** Moves the truck along its current leg for one step. */
@@ -215,7 +215,7 @@ public final class Truck {
     Stop arrivedAt = route.stops().get(cursor);
     phase = TruckPhase.DWELLING;
     dwellRemaining = arrivedAt.dwell();
-    transitions.add(new TruckTransition.Arrived(arrivedAt, now));
+    transitions.add(new TruckTransition.Arrived(vehicleId, shipmentId, arrivedAt, now));
   }
 
   /**

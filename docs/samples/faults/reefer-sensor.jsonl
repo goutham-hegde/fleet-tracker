@@ -1,0 +1,40 @@
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T09:43:25.329482400Z","tempC":4.18,"setpointC":4.0,"returnAirC":4.93,"supplyAirC":3.02,"door":"OPEN","batteryV":12.64}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T09:47:45.329482400Z","tempC":3.91,"setpointC":4.0,"returnAirC":4.32,"supplyAirC":2.93,"door":"OPEN","batteryV":12.79}
+<html><body>502 Bad Gateway</body></html>
+<html><body>502 Bad Gateway</body></html>
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T09:52:45.329482400Z","tempC":4.21,"setpointC":4.0,"returnAirC":4.94,"supplyAirC":3.39,"door":"OPEN","batteryV":12.5}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T09:53:25.329482400Z","tempC":3.69,"setpointC":4.0,"returnAirC":4.02,"supplyAirC":2.83,"door":"OPEN","batteryV":12.65}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T09:57:45.329482400Z","tempC":3.2,"setpointC":4.0,"returnAirC":3.95,"supplyAirC":2.0,"door":"OPEN","batteryV":12.24}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T09:58:25.329482400Z","tempC":4.24,"setpointC":4.0,"returnAirC":4.64,"supplyAirC":3.32,"door":"OPEN","batteryV":12.62}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:02:45.329482400Z","tempC":3.7,"setpointC":4.0,"returnAirC":4.21,"supplyAirC":2.83,"door":"OPEN","batteryV":12.34}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:03:NaNZ","tempC":4.38,"setpointC":4.0,"returnAirC":5.04,"supplyAirC":3.32,"door":"OPEN","batteryV":12.6}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:07:45.329482400Z","tempC":4.36,"setpointC":4.0,"returnAirC":5.26,"supplyAirC":3.28,"door":"OPEN","batteryV":12.69}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:08:25.329482400Z","tempC":3.79,"setpointC":4.0,"returnAirC":4.28,"supplyAirC":2.57,"door":"OPEN","batteryV":12.51}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:12:45.329482400Z","tempC":4.35,"setpointC":4.0,"returnAirC":4.77,"supplyAirC":3.33,"door":"OPEN","batteryV":12.27}
+{probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:13:25.329482400Z","tempC":4.13,"setpointC":4.0,"returnAirC":4.89,"supplyAirC":2.97,"door":"OPEN","batteryV":12.24}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:17:45.329482400Z","tempC":4.35,"setpointC":4.0,"returnAirC":5.08,"su
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:18:NaNZ","tempC":4.2,"setpointC":4.0,"returnAirC":4.93,"supplyAirC":3.19,"door":"OPEN","batteryV":12.64}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:18:NaNZ","tempC":4.2,"setpointC":4.0,"returnAirC":4.93,"supplyAirC":3.19,"door":"OPEN","batteryV":12.64}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:22:45.329482400Z","tempC":3.9,"setpointC":4.0,"returnAirC":4.77,"supplyAirC":2.69,"door":"OPEN","batteryV":12.69}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:23:25.329482400Z","tempC":4.16,"setpointC":4.0,"returnAirC":4.5,"supplyAirC":2.81,"door":"OPEN","batteryV":12.3}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:27:45.329482400Z","tempC":4.09,"setpointC":4.0,"returnAirC":4.93,"supplyAirC":2.95,"door":"OPEN","batteryV":12.48}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:28:25.329482400Z","tempC":3.77,"setpointC":4.0,"returnAirC":4.38,"supplyAirC":2.7,"door":"OPEN","batteryV":12.52}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:33:25.329482400Z","tempC":3.75,"setpointC":4.0,"returnAirC":4.25,"supplyAirC":2.56,"door":"OPEN","batteryV":12.63}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:37:45.329482400Z","tempC":4.3,"setpointC":4.0,"returnAirC":5.11,"supplyAirC":2.95,"door":"OPEN","batteryV":12.78}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:38:25.329482400Z","tempC":4.34,"setpointC":4.0,"returnAirC":5.13,"supplyAirC":3.43,"door":"OPEN","batteryV":12.38}
+<html><body>502 Bad Gateway</body></html>
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:43:25.329482400Z","tempC":4.88,"setpointC":4.0,"returnAirC":5.28,"supplyAirC":3.52,"door":"OPEN","batteryV":12.47}
+<html><body>502 Bad Gateway</body></html>
+<html><body>502 Bad Gateway</body></html>
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:48:25.329482400Z","tempC":3.56,"setpointC":4.0,"returnAirC":3.98,"supplyAirC":2.29,"door":"OPEN","batteryV":12.6}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:52:45.329482400Z","tempC":3.99,"setpointC":4.0,"returnAirC":4.75,"supplyAirC":2.8,"door":"OPEN","batteryV":12.67}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:52:45.329482400Z","tempC":3.99,"setpointC":4.0,"returnAirC":4.75,"supplyAirC":2.8,"door":"OPEN","batteryV":12.67}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:53:25.329482400Z","tempC":4.0,"setpointC":4.0,"returnAirC":4.39,"supplyAirC":2.97,"door":"OPEN","batteryV":12.53}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:57:45.329482400Z","tempC":4.38,"setpointC":4.0,"returnAirC":5.19,"supplyAirC":3.08,"door":"OPEN","batteryV":12.39}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:58:25.329482400Z","tempC":3.81,"setpointC":4.0,"returnAirC":4.15,"supplyAirC":2.92,"door":"OPEN","batteryV":12.62}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T10:58:25.329482400Z","tempC":3.81,"setpointC":4.0,"returnAirC":4.15,"supplyAirC":2.92,"door":"OPEN","batteryV":12.62}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T11:02:45.329482400Z","tempC":3.68,"setpointC":4.0,
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T11:03:25.329482400Z","tempC":4.24,"setpointC":4.0,"returnAirC":4.55,"supplyAirC":3.09,"door":"OPEN","batteryV":12.47}
+{"probe":"DEV-0006","model":"ThermoKing-CX7","readingUtc":"2026-08-31T11:07:NaNZ","tempC":3.92,"setpointC":4.0,"returnAirC":4.63,"supplyAirC":2.91,"door":"OPEN","batteryV":12.77}
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T11:08:25.329482400Z","tempC":3.48,"setpointC":4.0,"returnAirC":4.17,"supplyAirC":2.28,"door":"OPEN","batteryV":12.22}

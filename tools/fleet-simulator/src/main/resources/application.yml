@@ -22,6 +22,57 @@ fleet:
     repeat-routes: true
     auto-start: true
 
+    # The four source feeds. Every interval below is in SIMULATED time, so a feed reporting
+    # every 30s reports every 30 simulated seconds at any time-scale.
+    emit:
+      # Payloads are logged at DEBUG; this switch installs the sink at all.
+      logging: true
+      log-summary-every: 500
+      # Set to capture contract fixtures to disk, e.g. --fleet.simulator.emit.capture-dir=docs/samples
+      # Unset by default: an ordinary run should not write files.
+      capture-dir:
+      capture-max-per-feed: 200
+      # EDI writes a file per interchange rather than a line, so it gets a lower cap.
+      capture-max-interchanges: 15
+
+      telematics:
+        enabled: true
+        interval: 30s
+
+      mobile:
+        enabled: true
+        interval: 3m
+        # Chance per report of dropping into a dead zone, and how long one lasts.
+        outage-probability: 0.04
+        outage-duration: 25m
+
+      edi:
+        enabled: true
+        # Statuses accumulate and go out together, well after the fact.
+        batch-interval: 30m
+        filing-delay: 45m
+
+      reefer:
+        enabled: true
+        interval: 5m
+        # A dry van has no probe. Only refrigerated lanes report temperature.
+        only-cold-chain: true
+
+    # How the feeds are allowed to misbehave. Each is independent; every probability is per
+    # message. Run with --spring.profiles.active=chaos to switch them all on at once.
+    faults:
+      # Master switch. False forces everything below off, including GPS noise.
+      enabled: true
+      # Not a fault -- this is simply what GPS does, and M3's geofencing has to cope with it.
+      gps-noise-meters: 6.0
+      # An outright wrong fix: a reflected signal downtown, or a receiver leaving a tunnel.
+      bad-fix-probability: 0.0
+      bad-fix-radius-meters: 1500
+      # Transport faults, applied to every feed at the sink.
+      drop-probability: 0.0
+      duplicate-probability: 0.0
+      malformed-probability: 0.0
+
 logging:
   level:
     com.fleettracking.simulator: INFO

@@ -1,0 +1,25 @@
+# Every fault switched on at once, for generating dead-letter fixtures and for proving that
+# downstream consumers survive a bad day.
+#
+#   java -jar fleet-simulator.jar --spring.profiles.active=chaos
+#
+# The rates here are far higher than any real feed's. That is the point: this profile is a
+# stress case, not a forecast. A run at these settings should still produce a coherent picture
+# of the fleet, and if it does not, the consumer -- not the feed -- is what needs fixing.
+fleet:
+  simulator:
+    emit:
+      mobile:
+        # Dead zones roughly ten times more often than the default.
+        outage-probability: 0.35
+        outage-duration: 40m
+    faults:
+      enabled: true
+      # Poor reception rather than an open sky.
+      gps-noise-meters: 25.0
+      bad-fix-probability: 0.02
+      bad-fix-radius-meters: 1500
+      drop-probability: 0.05
+      duplicate-probability: 0.08
+      # These are the messages that must end up in the dead-letter topic and nowhere else.
+      malformed-probability: 0.04

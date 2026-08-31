@@ -32,11 +32,11 @@ public class LoggingTickObserver implements TickObserver {
     for (TruckTransition transition : report.transitions()) {
       switch (transition) {
         case TruckTransition.Arrived a ->
-            log.info("{}  ARRIVED  {} ({}, {})", a.at(), a.stop().name(), a.stop().city(), a.stop().state());
+            log.info("{}  {}  ARRIVED  {} ({}, {})", a.at(), a.shipmentId(), a.stop().name(), a.stop().city(), a.stop().state());
         case TruckTransition.Departed d ->
-            log.info("{}  DEPARTED {} ({}, {})", d.at(), d.stop().name(), d.stop().city(), d.stop().state());
+            log.info("{}  {}  DEPARTED {} ({}, {})", d.at(), d.shipmentId(), d.stop().name(), d.stop().city(), d.stop().state());
         case TruckTransition.RouteCompleted c ->
-            log.info("{}  COMPLETE {} ({}, {})", c.at(), c.finalStop().name(), c.finalStop().city(), c.finalStop().state());
+            log.info("{}  {}  COMPLETE {} ({}, {})", c.at(), c.shipmentId(), c.stop().name(), c.stop().city(), c.stop().state());
       }
     }
 
