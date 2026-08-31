@@ -3,13 +3,13 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-08-31 · **Current position:** M1 Synthetic Fleet complete, session S5 of 24
+**Last updated:** 2026-08-31 · **Current position:** M2 Events Land in progress, session S6 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
-M2 ░░░░░░░░░░  0/3              ← current
+M2 ███░░░░░░░  1/3              ← current
 M3 ░░░░░░░░░░  0/3
 M4 ░░░░░░░░░░  0/2
 M5 ░░░░░░░░░░  0/3
@@ -17,7 +17,7 @@ M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                5/24 sessions
+                6/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -64,15 +64,16 @@ criteria pass as of 2026-08-28; M1 is unblocked.**
 
 **Capability:** heterogeneous sources normalize into one canonical stream, correctly attributed.
 
-- [ ] **S6** — Gateway + telematics normalizer + first Testcontainers test
+- [x] **S6** — Gateway + telematics normalizer + first Testcontainers test
 - [ ] **S7** — Remaining normalizers + DLQ routing
 - [ ] **S8** — Identity resolution (device → vehicle → shipment)
 
 **Exit criteria**
 
-- [ ] Simulator → gateway → `position.events.v1`, asserted by integration test
-- [ ] All four formats normalize correctly against captured fixtures
-- [ ] Malformed input lands in the DLQ **and nowhere else**; valid input never does
+- [x] Simulator → gateway → `position.events.v1`, asserted by integration test
+- [ ] All four formats normalize correctly against captured fixtures — telematics only so far
+- [ ] Malformed input lands in the DLQ **and nowhere else**; valid input never does — holds for
+  telematics, unproven for the other three
 - [ ] An event carrying only a `deviceId` reaches Kafka with `vehicleId` and `shipmentId` populated
 
 ---
@@ -580,17 +581,125 @@ live feed.
 
 ---
 
+## S6 — Ingest gateway, telematics normalizer, first integration test
+
+**2026-08-31 · M2 · commit `3dd6119`**
+
+The first service. Four external feeds now have a front door: an HTTP endpoint each, a normalizer
+behind it, and Kafka on the far side. Telematics is the feed that works end to end; the other three
+have their endpoints framed and answer `503` until S7 writes their normalizers. This is also the
+first `*IT` in the repository — Failsafe has reported "No tests to run" since S1.
+
+**Built**
+
+- **`services/ingest-gateway`** — a Spring Boot web service. `POST /ingest/{telematics,mobile,
+  edi214,reefer}`, each taking the request body as an unparsed string.
+- **Identity resolution as a seam.** `IdentityResolver` answers three questions — what load is this
+  vehicle pulling, this device attached to, this shipment carried by — one for each fragment of
+  identity a feed happens to know. S6 ships a configuration-backed implementation standing in for a
+  transport management system; S8 replaces it with a MongoDB-backed one and no normalizer changes.
+  It refuses to start on contradictory reference data.
+- **`TelematicsNormalizer`** — flattens the vendor's nesting and converts four things that would
+  each fail silently: miles per hour to km/h, miles to kilometres, HDOP to a radius in metres, and a
+  heading of exactly 360 to 0. The odometer's stated unit is honoured rather than assumed.
+- **`NormalizationResult`** — a sealed success-or-rejection type rather than an exception, with
+  five rejection categories. Success carries a *list*, because an EDI interchange is a batch.
+- **Deterministic event ids.** An event's id is a name-based UUID over the feed, the reporting
+  device and the instant the source reported — never the arrival time. A duplicate delivery
+  therefore produces a byte-identical id, which is what lets a consumer de-duplicate and what lets a
+  replayed topic regenerate the ids it had before.
+- **Publishing and dead-lettering.** Canonical events go to `position.events.v1` keyed by
+  `shipmentId`; anything that could not become one goes to the new `ingest.dlq.v1` with the original
+  bytes, a reason, and both as Kafka headers. The send is awaited rather than fired and forgotten.
+- **`HttpMessageSink` in the simulator** — one more `MessageSink`, so the fleet can post to a
+  running gateway. No emitter changed. Off by default: the simulator's defining property is that it
+  runs standalone.
+- **`IngestGatewayIT`** — the first Testcontainers test. A real broker, pinned to the version the
+  cluster runs, with topics created explicitly rather than auto-created.
+- **35 new unit tests plus 4 integration tests**, taking the repository to 218.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| Sources reach the gateway over **HTTP** | The simulator writes raw payloads to Kafka ingest topics and the gateway consumes them | Three of the four feeds are systems this platform does not control — a telematics vendor's webhook, a phone app, a carrier's EDI system — and none of them will be given broker credentials or a client library. HTTP is what they can actually talk to. It also keeps the gateway the only writer to the source topics, so the invariant every consumer relies on is enforced in one place |
+| Request bodies bound as `String` | Bind to a typed payload and let the framework parse | A malformed message would fail inside request binding and return a framework-generated `400` the service never saw, so the dead-letter topic would be empty of precisely the messages it exists to hold. It also keeps `raw` byte-exact rather than a re-rendering with normalized whitespace and key order |
+| A rejected message gets **`202`**, not `400` | `400 Bad Request` for anything unparseable | Corrupt bytes corrupt identically on every retry, so a `400` either loses the message or invites an endless retry loop. `202` with a body saying `DEAD_LETTERED` and why is true: the payload is durably stored and the sender need not resend. `503` is reserved for the cases where a retry can genuinely help — the broker did not acknowledge, or the feed has no normalizer yet |
+| The producer send is awaited before responding | Fire and forget, respond immediately | Returning `202` while the message sits in a client-side batch in the JVM's heap is a lie: a rescheduled pod loses it after the vendor has been told it arrived. The gateway is where responsibility for a message transfers |
+| Event ids derived from what the source stated | A random UUID per event | Two feeds deliver the same message twice — the mobile app resends unacknowledged messages, and any HTTP producer retries a lost response. Random ids make the second copy indistinguishable from a real event, so the same fix is counted twice |
+| Validation applied centrally, in the ingest pipeline | Each normalizer validates its own output | "Every normalizer remembers to validate" is not a property code review enforces. Here a normalizer's output structurally cannot reach Kafka without being range-checked |
+| A feed with no normalizer answers `503` | Dead-letter it as unsupported | Nothing is wrong with the data; the gateway is unfinished. Filling the rejection topic with valid messages would bury the invalid ones it exists to surface |
+| One dead-letter topic for all four feeds | One per feed | Nothing consumes it in order or in isolation, and replay means running a backlog through the same fixed gateway. Each message names its own source in a header, so filtering is a header check rather than a separate subscription |
+| The dead-letter topic is unkeyed | Key it by whatever identifier could be salvaged | A message that failed to parse usually has no readable shipment id, and keying only the ones that do would spread one feed's failures unevenly for no benefit |
+| The HTTP sink drops when its queue is full | Block until the gateway catches up | The tick thread also moves every truck. Blocking would slow the fleet to whatever the gateway could absorb while its timestamps still claimed a compressed run. A real device with a full buffer drops too |
+
+**Surprises**
+
+- **Spring Boot 4 does not auto-configure a library you merely depend on.** Adding
+  `org.springframework.kafka:spring-kafka` produced `No qualifying bean of type
+  KafkaTemplate<String, String>`, which reads like a generics mismatch. Boot 4 moved
+  auto-configuration out of `spring-boot-autoconfigure` into a module per technology, so the raw
+  library brings the classes and nothing that builds one. `spring-boot-starter-kafka` is the
+  dependency. The error names the symptom and nothing about the cause.
+- **Failsafe tests the packaged artifact, which a Spring Boot service does not have.** The first
+  integration run failed with "Unable to find a `@SpringBootConfiguration` by searching packages
+  upwards from the test", as though the application class were misplaced. It was on the classpath
+  the whole time: the `repackage` goal had rewritten the module's jar into an executable one with
+  its classes under `BOOT-INF/classes`, and Failsafe puts that jar on the test classpath rather than
+  `target/classes`. Pointing Failsafe's `classesDirectory` at the build output directory fixes it
+  for every service that will follow.
+- **Testcontainers 2.x renamed every module.** The Boot 4.1.1 BOM manages Testcontainers 2.0.5, in
+  which `org.testcontainers:kafka` became `org.testcontainers:testcontainers-kafka`. The old
+  coordinates are simply unmanaged, so the build fails with `'dependencies.dependency.version' is
+  missing` — an error that never mentions a rename.
+- **`TestRestTemplate` no longer exists in Spring Boot 4.** Replaced here by a plain JDK
+  `HttpClient`, which is arguably the better test anyway: the endpoint is one a telematics vendor
+  will call with no Spring on their side at all.
+- **A shutdown that deadlocks exactly when shutdown matters.** The HTTP sink first stopped its
+  worker with a poison pill pushed onto the queue. The one moment shutdown matters most — a gateway
+  that has stopped answering, so the queue is full — is the one moment there is no room to enqueue
+  it, and the worker would wait on a queue nobody drains while `close()` waited on the worker. Found
+  by reasoning about the test rather than by the test failing. Replaced with a flag and a timed
+  poll.
+
+**Verified end to end**
+
+Eight simulated trucks posting to a locally running gateway put **3 984 position events** on
+`position.events.v1` on the Kind cluster, with **zero** dead letters. Both events sampled for
+`SHP-ATL-0003` landed on the same partition, which is the per-shipment ordering guarantee working.
+An odometer of 79 352.7 miles arrived as 127 705.79 km and an HDOP of 1.28 as 6.4 m, with the
+original payload intact in `raw`.
+
+**Left open**
+
+- Only telematics normalizes. The other three endpoints answer `503`.
+- Reference data is a fixed list in `application.yaml`. Until S8 it cannot express that a tractor
+  pulls a different load tomorrow, and a reefer probe still has no route to a shipment.
+- The gateway is not containerized and has no manifest; it runs from a jar against the cluster's
+  published ports. Deployment arrives with the rest of M2.
+- The HTTP sink's throughput ceiling is roughly 100 messages per second — one worker, and a Kafka
+  acknowledgement awaited per request. A run at `time-scale=600` asks for nearly three times that
+  and drops the excess by design. Realistic time scales are nowhere near it.
+- At high time scales `occurredAt` runs *ahead* of `receivedAt`, because simulated time outruns the
+  wall clock. Anything computing feed lag in M3 has to expect that from a compressed run.
+
+---
+
 ## Next up
 
-**S6 — Ingest gateway, telematics normalizer, and the first Testcontainers test.** M2 opens by
-building the service that turns the four wire formats into the two canonical envelopes. S6 covers
-the gateway skeleton, the telematics normalizer, and an integration test that runs a real Kafka
-in a container and asserts that a simulated truck's position reaches `position.events.v1`.
+**S7 — The remaining three normalizers, and dead-letter routing proved for all of them.** The
+gateway's shape is settled; S7 fills it in. The mobile app brings epoch milliseconds, metres per
+second, and a feed that genuinely repeats and reorders itself, so it is the first normalizer that
+has to think about duplicates rather than merely tolerate them. EDI 214 brings a parser: `~`
+terminated segments, meaningful empty elements, a carrier status vocabulary to translate, and one
+interchange that has to be split into an event per shipment before anything can be keyed. The
+reefer probe is the smallest of the three and the one that cannot finish, because a device id is
+all it has.
 
-The fixtures in `docs/samples/` are what the normalizers are tested against, so the gateway can be
-written and verified before it is ever pointed at a running simulator. `docs/samples/faults/` is
-the dead-letter set: those messages must land in a DLQ and nowhere else.
+`docs/samples/faults/` is the gate. Every corrupted message in it must land on `ingest.dlq.v1` and
+nowhere else, and every intact message beside it must still get through — a normalizer that rejects
+the whole file would pass a weaker version of that test while being useless.
 
-Two things S5 deliberately left for the gateway to solve: telematics carries a vehicle id and no
-shipment, and reefer readings carry only a device id, so neither can be keyed until identity
-resolution lands in S8. Until then the gateway routes what it can and dead-letters the rest.
+Two things S6 leaves behind: reference data is a fixed list in configuration, so a reefer reading
+still has no route to a shipment until S8; and the three unfinished endpoints answer `503`, which
+the simulator's HTTP sink already counts as refused rather than treating as an error.
