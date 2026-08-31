@@ -3,13 +3,13 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-08-29 · **Current position:** M1 Synthetic Fleet under way, session S4 of 24
+**Last updated:** 2026-08-31 · **Current position:** M1 Synthetic Fleet complete, session S5 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
-M1 █████░░░░░  1/2              ← current
-M2 ░░░░░░░░░░  0/3
+M1 ██████████  2/2              complete
+M2 ░░░░░░░░░░  0/3              ← current
 M3 ░░░░░░░░░░  0/3
 M4 ░░░░░░░░░░  0/2
 M5 ░░░░░░░░░░  0/3
@@ -17,7 +17,7 @@ M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                4/24 sessions
+                5/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -49,14 +49,14 @@ criteria pass as of 2026-08-28; M1 is unblocked.**
 **Capability:** realistic, multi-format event data on demand. De-risks everything downstream.
 
 - [x] **S4** — Simulator core: routes, movement physics, tick loop
-- [ ] **S5** — Four source formats + fault injection
+- [x] **S5** — Four source formats + fault injection
 
-**Exit criteria**
+**Exit criteria — all pass as of 2026-08-31; M2 is unblocked.**
 
 - [x] A simulated truck traverses a multi-stop route with plausible physics (unit-tested)
-- [ ] All four source formats emit correctly at a configurable rate
-- [ ] Each fault type can be switched on and is visible in the output
-- [ ] Sample payloads captured to `docs/samples/` as contract-test fixtures
+- [x] All four source formats emit correctly at a configurable rate
+- [x] Each fault type can be switched on and is visible in the output
+- [x] Sample payloads captured to `docs/samples/` as contract-test fixtures
 
 ---
 
@@ -495,19 +495,102 @@ be written and tested against, which is why it is built before the services that
 
 ---
 
+## S5 — Four source formats and fault injection
+
+**2026-08-31 · M1 · commit `55c2d46`**
+
+The simulator stops emitting internal snapshots and starts emitting what the four real feeds
+actually put on the wire. The movement core is untouched: every emitter attaches as a
+`TickObserver`, which is what S4's seam was for. M1 closes here, and `docs/samples/` now holds the
+contract fixtures M2's normalizers will be written against — before the gateway has ever seen a
+live feed.
+
+**Built**
+
+- **The emission seam.** `SourceMessage` carries a payload plus its provenance: which feed, what
+  content type, when the event happened, and — separately — when the source got round to sending
+  it. `MessageSink` is where a message goes, with a logging implementation, a file-capture
+  implementation, and a composite. S6's Kafka producer becomes one more implementation and no
+  formatting code changes.
+- **`Cadence`** — the piece that turns one uniform tick loop into four independent reporting rates,
+  measured in simulated time so the rates survive any `time-scale`. Each device gets a random phase
+  offset, so eight trucks reporting every thirty seconds do not all report on the same tick.
+- **Telematics** — nested JSON in imperial units. Reports a vehicle and no shipment, calls itself
+  `TLM-0002` while the reefer probe on the same truck is `DEV-0002`, and expresses accuracy as HDOP
+  rather than metres.
+- **Mobile app** — abbreviated keys, epoch milliseconds, metres per second. Knows the shipment and
+  not the vehicle: the exact inverse of telematics. Loses signal, buffers, and dumps the backlog on
+  reconnect out of order and with repeats.
+- **EDI 214** — full X12 interchanges, `ISA`/`GS` envelope around several `ST`…`SE` transaction
+  sets. No coordinates at all: a city and a state in an `MS1` segment. Delayed twice over, first by
+  the back office taking 45 simulated minutes to enter an event and then by waiting for the next
+  30-minute batch window.
+- **Reefer probe** — temperature, setpoint and a device id. No position, no vehicle, no shipment.
+  Only refrigerated lanes carry one.
+- **Fault injection** — GPS noise and bad fixes inside the emitters, drops, duplicates and
+  corruption at the sink boundary, each switchable on its own, all drawn from the run's seed so a
+  fault is reproducible. A `chaos` profile turns everything on at once.
+- **`docs/samples/`** — 150 messages per JSON feed, 10 EDI interchanges, plus a `faults/` set for
+  dead-letter fixtures. Regenerable from a fixed seed; the command is in the directory's README.
+- **53 new unit tests**, taking the module to 143.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| Full X12 interchange envelope, several shipments per file | Bare `ST`…`SE` transaction sets, one status per message | The batching *is* the awkward part of EDI. An interchange covering many shipments has no single shipment id and therefore no partition key, so M2 has to split it before it can key anything. Emitting one status per message would have quietly deleted that problem |
+| A `MessageSink` interface with swappable implementations | Emitters log their payloads, and S6 retrofits a seam | The same reasoning that made `TickObserver` worth having in S4. Kafka arrives as one implementation rather than as an edit to four emitters |
+| EDI carries city and state but **not** our stop id | Include the stop id so events match cleanly | A carrier does not know this platform's identifiers. Putting them on the wire would turn geocoding and stop matching — a substantial part of M2 and M3 — into a dictionary lookup |
+| Waypoint arrivals are never filed to EDI | File every arrival | Carriers report freight events, not every time a truck stops. Geofencing will observe arrivals EDI has no opinion about, which is a realistic disagreement between two sources and worth having |
+| Identity added to `TruckTransition` | Pair transitions back to trucks by timestamp | S4's transitions recorded that *a* truck arrived somewhere, which was enough to log them. EDI and the mobile app both need to name the shipment, and matching on timestamps afterwards is exactly the guesswork ground truth exists to avoid |
+| GPS noise on by default; every other fault off | All faults off, or all on | Noise is not a fault — it is what GPS does, and M3's geofencing has to rediscover arrivals from exactly that. Drops and corruption are faults, and a default run should be realistic rather than adversarial |
+| One `FaultProfile` per emitter, each separately seeded | One shared fault generator | Same reasoning as per-truck seeds in S4. A shared generator makes telematics output depend on whether the mobile app is switched on, and every fixture changes when any feed is disabled |
+| Transport faults wrap the capture sink | Faults applied beside capture | What lands in `docs/samples/` should be what the platform would actually receive — corruption included, dropped messages absent |
+| Separate, lower capture cap for EDI | One cap for all feeds | Three feeds append a line to one file; EDI writes a whole file per interchange. A cap generous enough for the mobile app's reconnect bursts to appear would have committed hundreds of near-identical EDI documents |
+
+**Surprises**
+
+- **The fixtures came out empty, and nothing said so.** `FileMessageSink` buffered writes and
+  flushed only on `close()`. Early trial runs looked fine because they wrote 70 KB and the 8 KB
+  buffer overflowed repeatedly on its own; the real capture, capped at 25 messages per feed, stayed
+  under 8 KB and never overflowed. The shutdown hook that would have flushed it never ran either,
+  because the runs were ended by killing the JVM. Three zero-byte files and a successful-looking
+  run. Capture now flushes per line: a sink whose output is only correct when the process exits
+  cleanly is wrong, because capture runs are ended by killing the process.
+- **A test that replayed the same hour twice.** The EDI test drove the emitter by computing tick
+  times from a fixed start, so a second call to the helper began again at the start rather than
+  continuing. Simulated time went backwards between the two phases and the batch window never came
+  round. The emitter was correct; the harness was not. For anything whose behaviour is defined by
+  elapsed time, the test clock has to be as continuous as the real one.
+- **A README claiming things the fixtures did not show.** The samples README described an
+  out-of-order reconnect burst, using a sequence copied from an earlier trial run. The committed
+  capture was capped at 25 messages spread over 8 trucks — about three reports each — so no truck
+  was ever offline long enough to produce one. Fixed by capping the JSON feeds far higher than EDI,
+  then re-deriving every example in the README from the committed files. Documentation about
+  generated artefacts has to be generated from the artefacts, or checked against them.
+
+**Left open**
+
+- The mobile app's outage model is per-shipment and independent, so two trucks in the same dead zone
+  are not correlated. Realistic correlation would need geography the emitter does not have.
+- EDI files timestamps as `UT` rather than local time with a zone code. Local-time filing is the
+  more realistic variant and a genuine integration trap, but it needs a timezone per stop, which is
+  data the route model does not carry. Worth revisiting when M2 has a geocoder that would know.
+- No emitter writes to a network. Everything is in-process until S6.
+
+---
+
 ## Next up
 
-**S5 — Four source formats and fault injection.** M1 finishes by making the simulator emit the four
-real wire shapes rather than internal snapshots: nested telematics JSON in imperial units, terse and
-unreliable mobile-app JSON, EDI 214 segment text with no coordinates, and reefer readings that carry
-a temperature and a device id but no position and no shipment. Each arrives as a `TickObserver`, so
-the movement core does not change.
+**S6 — Ingest gateway, telematics normalizer, and the first Testcontainers test.** M2 opens by
+building the service that turns the four wire formats into the two canonical envelopes. S6 covers
+the gateway skeleton, the telematics normalizer, and an integration test that runs a real Kafka
+in a container and asserts that a simulated truck's position reaches `position.events.v1`.
 
-Fault injection lands alongside them, because a feed that never misbehaves does not test anything
-M2 is built to survive: dropped messages, duplicates, out-of-order backlogs dumped after a
-connectivity gap, GPS noise and outright bad fixes, delayed EDI batches, and malformed payloads
-destined for the DLQ. Each fault switchable independently.
+The fixtures in `docs/samples/` are what the normalizers are tested against, so the gateway can be
+written and verified before it is ever pointed at a running simulator. `docs/samples/faults/` is
+the dead-letter set: those messages must land in a DLQ and nowhere else.
 
-Captured samples of all four formats go to `docs/samples/` at the end of S5 and become the contract
-fixtures M2's normalizers are tested against — which is what lets the gateway be written before it
-has ever seen a live feed.
+Two things S5 deliberately left for the gateway to solve: telematics carries a vehicle id and no
+shipment, and reefer readings carry only a device id, so neither can be keyed until identity
+resolution lands in S8. Until then the gateway routes what it can and dead-letters the rest.
