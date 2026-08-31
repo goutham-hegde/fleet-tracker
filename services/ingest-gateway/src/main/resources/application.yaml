@@ -1,0 +1,72 @@
+spring:
+  application:
+    name: ingest-gateway
+
+  kafka:
+    # 19092 on the host, not 9092: this machine already has something on the default port, and the
+    # Kind cluster publishes the broker on a non-default one for the same reason. Inside the
+    # cluster this is overridden to kafka.fleet.svc.cluster.local:9092.
+    bootstrap-servers: localhost:19092
+    producer:
+      # Strings both sides. The value is already JSON produced by EventJson, and a JSON serializer
+      # would build its own ObjectMapper -- a second, differently configured one, which is exactly
+      # what having a single EventJson exists to prevent.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Every in-sync replica must acknowledge before a send completes. Locally there is one broker
+      # so this is free; it is set here rather than in an overlay so that the durability the
+      # gateway promises its producers does not quietly depend on which environment it runs in.
+      acks: all
+      properties:
+        # Retry a transient broker error without letting a retry reorder a partition. Idempotence
+        # makes the broker discard a duplicate produced by a retry, which is what allows retries and
+        # per-shipment ordering to coexist.
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 20000
+        request.timeout.ms: 5000
+
+server:
+  # 8080 is taken on this machine; the whole project uses non-default host ports.
+  port: 18081
+
+fleet:
+  gateway:
+    # Comfortably inside delivery.timeout.ms above, so the producer gives up before this does and
+    # the failure surfaces as a broker error rather than as an unexplained timeout.
+    send-timeout: 15s
+
+    identity:
+      # Reference data standing in for a transport management system. These assignments match the
+      # simulator's default eight-truck fleet: trucks are dealt onto the four lanes in turn, and
+      # each carries a telematics unit (TLM-) plus, on the cold-chain lanes, a reefer probe (DEV-).
+      # S8 replaces this list with a MongoDB-backed lookup; the shape does not change.
+      assignments:
+        - shipment-id: SHP-CHI-0001
+          vehicle-id: VEH-0001
+          device-ids: [TLM-0001, DEV-0001]
+        - shipment-id: SHP-LAX-0002
+          vehicle-id: VEH-0002
+          device-ids: [TLM-0002, DEV-0002]
+        - shipment-id: SHP-ATL-0003
+          vehicle-id: VEH-0003
+          device-ids: [TLM-0003, DEV-0003]
+        - shipment-id: SHP-HOU-0004
+          vehicle-id: VEH-0004
+          device-ids: [TLM-0004, DEV-0004]
+        - shipment-id: SHP-CHI-0005
+          vehicle-id: VEH-0005
+          device-ids: [TLM-0005, DEV-0005]
+        - shipment-id: SHP-LAX-0006
+          vehicle-id: VEH-0006
+          device-ids: [TLM-0006, DEV-0006]
+        - shipment-id: SHP-ATL-0007
+          vehicle-id: VEH-0007
+          device-ids: [TLM-0007, DEV-0007]
+        - shipment-id: SHP-HOU-0008
+          vehicle-id: VEH-0008
+          device-ids: [TLM-0008, DEV-0008]
+
+logging:
+  level:
+    com.fleettracking: INFO

@@ -27,6 +27,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param mobile the driver's phone
  * @param edi the carrier's back-office batch
  * @param reefer the trailer temperature probe
+ * @param http where to post emitted messages, when the simulator is pointed at a running gateway
  */
 @ConfigurationProperties(prefix = "fleet.simulator.emit")
 public record EmissionProperties(
@@ -38,7 +39,8 @@ public record EmissionProperties(
     Telematics telematics,
     Mobile mobile,
     Edi edi,
-    Reefer reefer) {
+    Reefer reefer,
+    Http http) {
 
   public EmissionProperties {
     logging = logging == null || logging;
@@ -50,6 +52,12 @@ public record EmissionProperties(
     mobile = mobile == null ? new Mobile(null, null, null, null, null) : mobile;
     edi = edi == null ? new Edi(null, null, null, null, null, null) : edi;
     reefer = reefer == null ? new Reefer(null, null, null, null) : reefer;
+    http = http == null ? new Http(null, null, null, null) : http;
+  }
+
+  /** True when the simulator should post its output to a gateway. */
+  public boolean posting() {
+    return http.enabled();
   }
 
   /** True when a capture directory has actually been configured. */
@@ -144,6 +152,30 @@ public record EmissionProperties(
       interval = interval == null ? Duration.ofMinutes(5) : interval;
       onlyColdChain = onlyColdChain == null || onlyColdChain;
       model = model == null ? "ThermoKing-CX7" : model;
+    }
+  }
+
+  /**
+   * Posting emitted messages to the ingest gateway over HTTP, the way real devices reach it.
+   *
+   * @param enabled default <b>false</b>, unlike every other feed setting here. The simulator's
+   *     defining property is that it runs standalone: switching this on by default would make a
+   *     plain {@code java -jar} run depend on a service being up, and fill the console with
+   *     connection errors when it is not
+   * @param baseUrl the gateway's root, default {@code http://localhost:18081} — the non-default
+   *     port the rest of this project uses, since 8080 is taken on this machine
+   * @param timeout connect and request timeout, default 5s. A device on a cellular link gives up
+   *     quickly and tries again later rather than holding a socket open
+   * @param queueCapacity how many messages may wait to be sent, default 5000. When it fills, new
+   *     messages are dropped rather than the fleet being made to wait — which is what a real
+   *     device with a full buffer does
+   */
+  public record Http(Boolean enabled, String baseUrl, Duration timeout, Integer queueCapacity) {
+    public Http {
+      enabled = enabled != null && enabled;
+      baseUrl = baseUrl == null || baseUrl.isBlank() ? "http://localhost:18081" : baseUrl;
+      timeout = timeout == null ? Duration.ofSeconds(5) : timeout;
+      queueCapacity = queueCapacity == null || queueCapacity <= 0 ? 5000 : queueCapacity;
     }
   }
 }

@@ -59,6 +59,11 @@ spec:
               # SLA exceptions. Rare by definition; if this topic is busy the
               # fleet is on fire.
               create exceptions.v1         3
+              # Everything the ingest gateway could not turn into a canonical
+              # event, with the original payload intact. One topic for all four
+              # feeds: nothing consumes it in order or in isolation, and each
+              # message records its own source as a header.
+              create ingest.dlq.v1         3
 
               echo "--- topics now on the cluster ---"
               /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BS" --list

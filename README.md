@@ -101,9 +101,12 @@ per-shipment ordering the design depends on.
 | `shipment.derived.v1` | 6 | Arrivals, departures, ETA updates. |
 | `status.events.v1` | 3 | Status changes — per stop, not per second. |
 | `exceptions.v1` | 3 | SLA exceptions raised and cleared. |
+| `ingest.dlq.v1` | 3 | Messages the gateway could not normalize, with the original payload intact. |
 
 All topics are keyed by `shipmentId`, which is what guarantees per-shipment ordering without
-paying for global ordering.
+paying for global ordering. The dead-letter topic is the exception and is deliberately unkeyed: a
+message that failed to parse usually has no readable shipment id, and nothing consumes that topic
+in order.
 
 ### Addresses
 
@@ -158,8 +161,67 @@ Lanes are Chicago→Dallas (long-haul), Los Angeles→Denver (refrigerated), Atl
 (multi-stop LTL) and Houston→Laredo (border drayage). They differ in shape on purpose — leg
 lengths, stop counts and dwell patterns are all different, so a bug cannot hide behind uniformity.
 
-As of S4 the only output is the log. The four source wire formats and fault injection arrive in S5,
-and the events reach Kafka from S6.
+### Output
+
+The simulator emits four dissimilar wire formats — nested imperial telematics JSON, a terse mobile
+app payload, X12 EDI 214 interchanges and reefer probe readings. Each goes to a *sink*, and sinks
+compose: the console, capture files, and the ingest gateway over HTTP.
+
+```bash
+# Capture contract fixtures to disk (see docs/samples/README.md for the exact commands).
+--fleet.simulator.emit.capture-dir=docs/samples
+
+# Post everything to a running ingest gateway, the way real devices reach it.
+--fleet.simulator.emit.http.enabled=true
+--fleet.simulator.emit.http.base-url=http://localhost:18081
+```
+
+Faults — GPS noise, dropped and duplicated messages, corrupted payloads — are independently
+switchable and drawn from the run's seed, so they replay. `--spring.profiles.active=chaos` turns
+them all on. Captured samples of every feed, clean and corrupted, are committed under
+[`docs/samples/`](docs/samples/).
+
+## Ingest gateway
+
+The platform's front door. Four external feeds arrive as HTTP requests in four dissimilar formats;
+each becomes one of the two canonical envelopes and is published to Kafka, or — if it cannot be —
+is published to the dead-letter topic with the original bytes and a reason attached.
+
+```bash
+./mvnw -pl services/ingest-gateway -am package
+java -jar services/ingest-gateway/target/ingest-gateway-0.1.0-SNAPSHOT.jar
+```
+
+| Endpoint | Feed | Knows | Status |
+|---|---|---|---|
+| `POST /ingest/telematics` | In-cab unit, nested imperial JSON | vehicle | normalized |
+| `POST /ingest/mobile` | Driver's phone, terse and unreliable | shipment | S7 |
+| `POST /ingest/edi214` | Carrier back office, batch X12 text | shipment | S7 |
+| `POST /ingest/reefer` | Trailer temperature probe | device | S7 |
+
+An endpoint whose normalizer is not written yet answers `503`, not a rejection — the data is fine
+and the gateway is unfinished, and dead-lettering good messages would bury the bad ones.
+
+Three response outcomes, all with the body naming what happened:
+
+| Status | Meaning |
+|---|---|
+| `202 ACCEPTED` | Normalized and durably on a canonical topic. |
+| `202 DEAD_LETTERED` | Could not be normalized; the original is durably on `ingest.dlq.v1`, with the reason. Not a `400`, because resending identical bytes cannot produce a different result — a `400` would either lose the message or invite an infinite retry loop. |
+| `503` | This platform is at fault: the broker did not acknowledge, or the feed has no normalizer. The only case where a retry can help. |
+
+Identity resolution is what lets a feed that names only a vehicle produce an event keyed by
+shipment. Until S8 it reads a fixed list of assignments from configuration under
+`fleet.gateway.identity.assignments`, matching the simulator's default fleet.
+
+To watch the whole path end to end, start the gateway and point the simulator at it:
+
+```bash
+java -jar services/ingest-gateway/target/ingest-gateway-0.1.0-SNAPSHOT.jar &
+java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar   --fleet.simulator.emit.http.enabled=true --fleet.simulator.time-scale=60
+
+./scripts/kafka-cli.sh kafka-console-consumer.sh --bootstrap-server localhost:19092   --topic position.events.v1 --from-beginning
+```
 
 ## Prerequisites
 

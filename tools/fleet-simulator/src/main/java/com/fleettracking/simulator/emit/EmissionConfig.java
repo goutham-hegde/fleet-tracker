@@ -53,6 +53,15 @@ public class EmissionConfig {
               properties.captureMaxPerFeed(),
               properties.captureMaxInterchanges()));
     }
+    if (properties.posting()) {
+      // The seam paying off: the ingest gateway becomes a destination without a single emitter
+      // knowing it exists. Off by default -- the simulator's whole point is that it runs alone.
+      sinks.add(
+          new HttpMessageSink(
+              properties.http().baseUrl(),
+              properties.http().timeout(),
+              properties.http().queueCapacity()));
+    }
 
     // Transport faults wrap the real sinks rather than sitting beside them, so what is captured to
     // disk is what the platform would actually receive -- dropped messages absent, duplicates and

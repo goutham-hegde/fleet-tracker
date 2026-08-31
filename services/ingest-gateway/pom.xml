@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.fleettracking</groupId>
+    <artifactId>fleet-tracking-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>ingest-gateway</artifactId>
+  <name>ingest-gateway</name>
+  <description>The front door: accepts the four source formats, normalizes them, publishes to Kafka</description>
+
+  <dependencies>
+    <!-- The canonical envelopes this service exists to produce. -->
+    <dependency>
+      <groupId>com.fleettracking</groupId>
+      <artifactId>events</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- starter-web, not the plain starter: this service is an HTTP front door. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Hibernate Validator, used to check a normalized envelope before it is published.
+         libs/events declares the constraints but deliberately ships no implementation. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <!-- starter-kafka, not org.springframework.kafka:spring-kafka on its own. Spring Boot 4 moved
+         auto-configuration out of spring-boot-autoconfigure into a module per technology, so the
+         raw library brings KafkaTemplate the class and nothing that builds one. The failure is
+         "No qualifying bean of type KafkaTemplate<String, String>", which reads like a generics
+         mismatch and is actually a missing module. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-kafka</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-configuration-processor</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- A real broker in a container for *IT tests. Versions come from the Spring Boot BOM,
+         which imports testcontainers-bom (2.0.5 under Boot 4.1.1).
+
+         Note the artifact ids: Testcontainers 2.x renamed every module to a "testcontainers-"
+         prefix, so the 1.x coordinates org.testcontainers:kafka and org.testcontainers:junit-jupiter
+         are unmanaged here and fail the build with "version is missing" rather than with anything
+         that mentions the rename. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- The repackage goal must be declared explicitly: this build imports the Spring Boot
+           BOM rather than inheriting spring-boot-starter-parent, so it gets dependency versions
+           but none of the parent's plugin executions. Without this the jar builds without a
+           warning and dies at runtime with "no main manifest attribute". -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

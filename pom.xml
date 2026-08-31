@@ -14,6 +14,7 @@
 
   <modules>
     <module>libs/events</module>
+    <module>services/ingest-gateway</module>
     <module>tools/fleet-simulator</module>
   </modules>
 
@@ -94,6 +95,14 @@
           <includes>
             <include>**/*IT.java</include>
           </includes>
+          <!-- Failsafe tests the packaged artifact by design, which breaks against a Spring Boot
+               service: the repackage goal rewrites the module's jar into an executable one whose
+               classes live under BOOT-INF/classes, so nothing on the test classpath can see them.
+               The symptom names none of that: the context simply fails with "Unable to find a
+               @SpringBootConfiguration by searching packages upwards from the test", as though the
+               application class had been misplaced. Pointing Failsafe at the plain output directory
+               tests exactly what Surefire does. -->
+          <classesDirectory>${project.build.outputDirectory}</classesDirectory>
         </configuration>
         <executions>
           <execution>
