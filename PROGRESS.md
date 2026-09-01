@@ -3,21 +3,21 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-01 · **Current position:** M2 Events Land in progress, session S7 of 24
+**Last updated:** 2026-09-02 · **Current position:** M2 Events Land complete, session S8 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
-M2 ███████░░░  2/3              ← current
-M3 ░░░░░░░░░░  0/3
+M2 ██████████  3/3              complete
+M3 ░░░░░░░░░░  0/3              ← next
 M4 ░░░░░░░░░░  0/2
 M5 ░░░░░░░░░░  0/3
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                7/24 sessions
+                8/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -66,7 +66,7 @@ criteria pass as of 2026-08-28; M1 is unblocked.**
 
 - [x] **S6** — Gateway + telematics normalizer + first Testcontainers test
 - [x] **S7** — Remaining normalizers + DLQ routing
-- [ ] **S8** — Identity resolution (device → vehicle → shipment)
+- [x] **S8** — Identity resolution (device → vehicle → shipment)
 
 **Exit criteria**
 
@@ -77,11 +77,12 @@ criteria pass as of 2026-08-28; M1 is unblocked.**
 - [x] An event carrying only a `deviceId` reaches Kafka with `vehicleId` and `shipmentId` populated
   — the reefer feed, asserted by integration test
 
-All four criteria pass as of 2026-09-01, against **configuration-backed reference data**. S8 is
-still owed: it replaces that fixed list with a MongoDB-backed lookup, so the platform can express
-that a tractor pulls a different load tomorrow. The criteria do not name where reference data comes
-from, and the seam means no normalizer changes when it moves — but M3 should not be started on the
-assumption that identity resolution is finished.
+**All four criteria pass as of 2026-09-02, against MongoDB-backed reference data. M3 is
+unblocked.** S8 replaced the fixed configuration list with a temporal lookup: an assignment states
+that a tractor pulled a load, wearing a given set of devices, over a period, and every lookup asks
+as of the instant the source stated. A tractor that changes loads at noon, a trailer probe swapped
+onto another vehicle, and an EDI batch filed four hours late all now resolve to what was actually
+true at the time.
 
 ---
 
@@ -766,20 +767,89 @@ which the two-outcome version could not express.
 
 ---
 
+## S8 — Identity resolution against MongoDB, and a lookup that knows what time it is
+
+**2026-09-02 · M2**
+
+Reference data left the configuration file. An assignment now states that a tractor pulled a load,
+wearing a given set of devices, **over a period**, and every lookup asks as of the instant the
+source stated rather than as of now. That single change is what M2 was missing: the platform can
+express that a tractor pulls a different load tomorrow, and answer correctly about yesterday.
+
+M2's four exit criteria pass against real reference data, and M3 is unblocked.
+
+**Built**
+
+- **`Assignment`** — one dispatch decision as a MongoDB document: shipment, vehicle, the devices
+  fitted to it, and a half-open validity window `[validFrom, validTo)`. Half-open so two consecutive
+  loads meet exactly at the changeover instant without both claiming it. An open assignment carries
+  a null end, which is the normal state of a running load rather than an edge case.
+- **`MongoIdentityResolver`** — the same three questions, answered by one indexed query with a range
+  on the validity window. It asks for two matches and uses one: if two come back, the reference data
+  contradicts itself and it resolves nothing rather than picking a side.
+- **`scripts/seed-identity.sh`** — loads dispatch reference data and creates the three indexes.
+  Idempotent, because a document's id is derived from the shipment and the assignment's start
+  instant, exactly as event ids are derived from the payload.
+- **`MongoIdentityResolverIT`** — 11 tests against a real MongoDB, including the two cases that
+  could not previously be stated: one tractor resolving to different loads at 13:00 and 15:00, and a
+  trailer probe swapped at noon resolving to whichever tractor actually had it.
+- The end-to-end test now runs against a MongoDB container as well as a Kafka one, because the claim
+  it makes — a device id reaches Kafka as a shipment id — is now a claim about a database query.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| Every lookup takes **the instant the source stated** | Keep the time-free interface and resolve "as of now" inside the implementation, so no normalizer changes | The seam was built to make the swap invisible, and honouring that literally would have made the temporal schema unusable — a time-aware question cannot be asked through a time-free interface. Three of the four feeds are delayed by design: EDI by a filing delay and a batch window, the mobile app by connectivity gaps it buffers through. Resolving those against arrival time attributes the end of one load to the next one the tractor picked up. Four call sites changed, each by one argument |
+| **One query per message, no cache** | Hold the assignment table in memory and refresh it on a timer | The round trip is one indexed lookup on the same cluster, and this service's ceiling is the broker acknowledging a produce request, not this. A cache buys a staleness window — a period during which the gateway knowingly attributes positions using an assignment dispatch has already ended — to save a cost that is not the bottleneck. The seam still permits a cached implementation if profiling ever disagrees |
+| Contradictory reference data **resolves to nothing** | Return the first match, or fail at startup as the old resolver did | Two overlapping assignments mean dispatch has said a tractor is pulling two loads at once. Mongo cannot express "no two documents for this vehicle may overlap in time" as a unique index, so the check moved to read time. Returning either candidate would publish positions attributed to a load that may not be carrying them, silently, at the rate telematics arrives. Failing at startup is no longer available: reference data is operational data that changes while the service runs |
+| Validity windows are **half-open**, with a null end for an open assignment | Closed intervals; or a far-future sentinel date instead of null | With closed intervals the changeover instant belongs to both assignments, which is precisely the contradiction the overlap check exists to catch. A sentinel end date collapses the query into one comparison and indexes marginally better, at the cost of every reader having to know that the year 9999 means "still running" |
+| The configuration-backed resolver was **deleted**, not kept as a fallback | Keep both, selected by a property | Two definitions of the truth, one of which cannot express history. An in-memory equivalent moved into test sources for the normalizer unit tests, and it honours validity windows rather than ignoring them — a stub that answered every instant identically would let a normalizer pass the wrong timestamp with no test noticing |
+| Reference data is **seeded by a script**, with indexes created explicitly | Let the application create indexes on startup, or rely on implicit indexing | Same reasoning as creating Kafka topics in a Job with explicit partition counts rather than letting a producer auto-create them: a collection that indexes itself the first time something queries it is a collection whose performance depends on which query happened to run first |
+| The seed provisions **64 trucks**, not 8 | Mirror the simulator's default fleet size | With repeat-routes on — the simulator's default — a finished truck is replaced by a fresh one numbered 9, 10, 11, and every event from those resolved to nothing. A long demo run was quietly dead-lettering perfectly valid freight, and the fixed list made that unfixable rather than merely wrong |
+
+**Surprises**
+
+- **Spring Boot 4 renamed the MongoDB connection properties, and the old names fail silently.**
+  `spring.data.mongodb.uri` is deprecated at level `error` since 4.0.0 in favour of
+  `spring.mongodb.uri`; a property deprecated at that level is not bound, and nothing is logged. The
+  application fell back to the default `mongodb://localhost/test` — which on this machine is an
+  unrelated MongoDB that accepted the connection and answered every query. **The integration test
+  passed while seeding reference data into a database belonging to something else**, because a test
+  that seeds a database and reads it back is satisfied by any database. It was caught by a startup
+  log line reporting 8 assignments where the cluster held 64. Three guards now: the corrected
+  property names, a startup line naming the database actually connected to, and a test asserting the
+  port the client is connected to — the one claim that successful reading and writing cannot fake.
+- **The temporal lookup made a pre-existing bug visible.** Trucks 9 and above have never had
+  reference data, so any run long enough for a truck to finish its route was dead-lettering valid
+  events. The fixed list could not have been extended to cover it without knowing the run length in
+  advance.
+- **The overlap check fires on data that looks fine in isolation.** Both assignments are individually
+  valid; only their intersection is wrong. That is why it cannot be a schema constraint.
+
+**Left open**
+
+- The gateway is still not containerized and has no manifest, so reference data lives on the cluster
+  while the service reading it runs from a jar on the host.
+- Nothing writes assignments except the seed script. A real deployment learns them from a TMS feed;
+  the collection and the query would not change.
+- `docs/samples/faults/edi-214/` still contains no partially-damaged interchange, so that path is
+  covered by a constructed fixture.
+
+---
+
 ## Next up
 
-**S8 — Identity resolution against MongoDB, replacing the fixed list in configuration.** Every feed
-now leans on reference data and the reefer feed cannot produce a single event without it, so this is
-the last thing standing between M2 and being finished. The seam is already in place: one interface
-with three questions, one bean to swap, and no normalizer changes.
+**S9 — Position persistence, and the first consumer.** M2 is closed: four dissimilar feeds land on
+one attributed stream, and every event on it carries a shipment, a vehicle and a validated payload.
+M3 makes the platform *know* something rather than merely carry it.
 
-The work is a schema and a lookup rather than new plumbing. An assignment is a shipment, the vehicle
-carrying it and the devices fitted to it, valid over a period — which is the part configuration
-cannot express at all. A tractor pulls a different load tomorrow, a trailer with its reefer probe is
-swapped onto another vehicle mid-route, and a position stamped last Tuesday must resolve against
-what was true last Tuesday rather than what is true now. That makes the lookup a query by identifier
-*and instant*, not by identifier alone.
+S9 builds `tracking-processor`, the first Kafka consumer in the repository, and writes position
+history into a MongoDB **time-series collection** — the storage primitive, not hand-rolled bucketing.
+Two things are new rather than more of the same: a consumer group is what lets the processor scale
+independently of the gateway, and a restart must neither lose positions nor replay them twice, which
+is an offset-commit question rather than a database one.
 
-Two things S7 leaves behind: no partially-damaged interchange exists in the committed fault
-fixtures, so that path is proved against a constructed one; and the gateway still runs from a jar
-against the cluster's published ports rather than from a manifest inside it.
+Three things S8 leaves behind: the gateway still runs from a jar rather than from a manifest inside
+the cluster; nothing writes assignments except the seed script; and the committed fault fixtures
+still contain no partially-damaged EDI interchange.
