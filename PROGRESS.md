@@ -3,13 +3,13 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-08-31 · **Current position:** M2 Events Land in progress, session S6 of 24
+**Last updated:** 2026-09-01 · **Current position:** M2 Events Land in progress, session S7 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
-M2 ███░░░░░░░  1/3              ← current
+M2 ███████░░░  2/3              ← current
 M3 ░░░░░░░░░░  0/3
 M4 ░░░░░░░░░░  0/2
 M5 ░░░░░░░░░░  0/3
@@ -17,7 +17,7 @@ M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                6/24 sessions
+                7/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -65,16 +65,23 @@ criteria pass as of 2026-08-28; M1 is unblocked.**
 **Capability:** heterogeneous sources normalize into one canonical stream, correctly attributed.
 
 - [x] **S6** — Gateway + telematics normalizer + first Testcontainers test
-- [ ] **S7** — Remaining normalizers + DLQ routing
+- [x] **S7** — Remaining normalizers + DLQ routing
 - [ ] **S8** — Identity resolution (device → vehicle → shipment)
 
 **Exit criteria**
 
 - [x] Simulator → gateway → `position.events.v1`, asserted by integration test
-- [ ] All four formats normalize correctly against captured fixtures — telematics only so far
-- [ ] Malformed input lands in the DLQ **and nowhere else**; valid input never does — holds for
-  telematics, unproven for the other three
-- [ ] An event carrying only a `deviceId` reaches Kafka with `vehicleId` and `shipmentId` populated
+- [x] All four formats normalize correctly against captured fixtures
+- [x] Malformed input lands in the DLQ **and nowhere else**; valid input never does — proved for
+  all four feeds against `docs/samples/faults/`
+- [x] An event carrying only a `deviceId` reaches Kafka with `vehicleId` and `shipmentId` populated
+  — the reefer feed, asserted by integration test
+
+All four criteria pass as of 2026-09-01, against **configuration-backed reference data**. S8 is
+still owed: it replaces that fixed list with a MongoDB-backed lookup, so the platform can express
+that a tractor pulls a different load tomorrow. The criteria do not name where reference data comes
+from, and the seam means no normalizer changes when it moves — but M3 should not be started on the
+assumption that identity resolution is finished.
 
 ---
 
@@ -685,21 +692,94 @@ original payload intact in `raw`.
 
 ---
 
+## S7 — The other three normalizers, and dead-letter routing proved for all four
+
+**2026-09-01 · M2 · commit `8f073ca`**
+
+All four feeds now reach Kafka. The gateway's shape did not change to accommodate them: three new
+`Normalizer` beans, collected by type, and no edit to the controller, the config class or the
+publisher. What did change is the result type — a batch feed turns out to be able to fail *partly*,
+which the two-outcome version could not express.
+
+**Built**
+
+- **`MobileAppNormalizer`** — epoch milliseconds to an instant, metres per second to km/h, and a
+  shipment id resolved to a vehicle, which is the exact inverse of the telematics lookup. A
+  driver's tap becomes a status event carrying the phone's coordinates; a routine ping becomes a
+  position. There is no dedup table and no reordering buffer in it: the derived event id already
+  makes a resend byte-identical, and lag is passed through as the gap between `occurredAt` and
+  `receivedAt` rather than disguised.
+- **`Edi214Normalizer`** — an X12 reader. Splits on `~` rather than newlines, preserves empty
+  elements, honours the `AT7` time zone code as a fixed offset, translates the carrier's status
+  vocabulary, and splits one interchange into one event per `ST`/`SE` transaction set. It verifies
+  the format's own checksums: `SE` counts the segments in its set and `GE` counts the sets in the
+  group, which is the only way to notice segments that were dropped rather than never sent.
+- **`ReeferNormalizer`** — a temperature, a device id and nothing else, resolved to a shipment
+  entirely from reference data. Becomes a status event with no position and no place name, carrying
+  both the measured and the setpoint temperature so every consumer derives the deviation the same
+  way from the numbers the device actually sent.
+- **`NormalizationResult.Partial`** — the third outcome: some events came out, and something was
+  also wrong. `IngestService` publishes the survivors and dead-letters the original bytes whole.
+- **61 new tests**, taking the repository to 272 unit tests and 7 integration tests.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| A damaged batch **publishes what survived and dead-letters the whole original** | Reject the entire interchange if any part of it is damaged | A truncated interchange typically holds several complete, self-consistent shipment statuses and one that was cut off. Rejecting all of them throws away real freight events that the carrier's back office has already sent and will not send again. Publishing without a dead-letter leaves no record anywhere that anything was missing. Doing both is only safe because event ids are derived: replaying the dead-letter entry regenerates byte-identical ids for what already published, and downstream de-duplication absorbs them |
+| The mobile normalizer holds **no dedup state** | Remember recently-seen ids and drop repeats at the gateway | The gateway is the component that gets restarted and scaled horizontally. Three instances behind a load balancer would each dedupe against their own private idea of what they had seen, which is worse than not deduping at all. The derived id pushes the decision to consumers, which have the state to make it |
+| The mobile normalizer does **not reorder** a backlog burst | Buffer and sort by `occurredAt` before publishing | Buffering means choosing how long to wait for a phone that may be off for an hour. Kafka preserves arrival order within a partition and a shipment's messages all share one, so M3 sees the burst as it happened and decides with the full picture |
+| The event-kind is part of the mobile **event id**, not the app's `seq` | Use `seq`, which is unique per installation | `seq` counts messages sent, so it restarts at 1 on a reinstall and the same fix resent afterwards would produce a different id — the exact failure derived ids exist to prevent. The event kind separates a driver's tap from the ping sent in the same second, which is the only real collision |
+| `AF` maps to **`PICKED_UP`**, not to a generic departure | Map all four departure-shaped codes to `DEPARTED_STOP` | "Carrier departed pick-up location with shipment" is the moment the freight is aboard, which is the milestone a customer's SLA is written against. `X3` and `X1` do both collapse to one arrival, because the canonical vocabulary describes what happened to the truck and the route model already knows which stop it was |
+| An unknown status code or event type is **rejected** | Fall back to a generic position or status | A carrier or an app version extending its vocabulary should surface in the dead-letter topic as work to do, rather than disappear into the canonical stream looking ordinary |
+| The `AT7` time zone code is **honoured**, and `LT` is rejected | Assume UTC | Reading a Pacific timestamp as UTC puts an arrival eight hours early — a plausible-looking time, not an error. `LT` means "local time" for a sender whose location the file never states, so there is nothing to convert with |
+| EDI carries a `LocationHint` and **never a coordinate** | Geocode the city centroid at ingest | The centroid of Memphis is 8 km from most of Memphis, and publishing it into a position field would tell every consumer there was a real fix. Geocoding is a consumer's decision, made with a tolerance it chooses |
+| The reefer feed leaves `stopId` and `position` null | Fill them from the last known position of the same shipment | That would be this service inventing a fact by joining two feeds, in the one component whose job is to normalize each feed faithfully. It is also exactly what M3 is for |
+
+**Surprises**
+
+- **Five of the eight committed fault interchanges are not damaged at all.** The chaos profile
+  corrupts a fraction of what it emits, and by chance it truncated only one interchange, before any
+  complete transaction set. So nothing in `docs/samples/faults/` exercises partial acceptance, and
+  the test that covers it truncates a good committed interchange deterministically instead. Worth
+  knowing before trusting a fixture directory to cover a case by name.
+- **Dropping a single `~` produces a file that still parses.** Removing the first segment terminator
+  merges the `ISA` and `GS` headers into one segment that still begins with `ISA`; every count
+  below it still agrees, and no check catches it. The only visible symptom is that no standalone
+  `GS` exists, so the parser looks for one — a check that reads as pointless until you know why.
+- **A test helper from S6 assumed every record on a topic was a position event.** It cast to
+  `PositionEvent` to reach the raw payload, which was true while only telematics worked and threw a
+  `ClassCastException` the moment status events appeared. The fix was to read the shared supertype.
+- **Two tests posting the same captured payload see each other's records.** Both drain from the
+  start of the topic, and a resent payload produces a byte-identical event by design — so the
+  duplicate was the derived-id property working, surfacing as a test collision. Tests now
+  deliberately pick different captured lines and say why.
+
+**Left open**
+
+- Reference data is still a fixed list in `application.yaml`. Every feed now depends on it, and the
+  reefer feed depends on it completely. S8 replaces the implementation behind the existing seam.
+- The gateway is still not containerized and has no manifest.
+- `docs/samples/faults/edi-214/` does not contain a partially-damaged interchange, so that case is
+  covered by a constructed fixture rather than a captured one. A future chaos capture with a
+  higher truncation rate would provide a real one.
+
+---
+
 ## Next up
 
-**S7 — The remaining three normalizers, and dead-letter routing proved for all of them.** The
-gateway's shape is settled; S7 fills it in. The mobile app brings epoch milliseconds, metres per
-second, and a feed that genuinely repeats and reorders itself, so it is the first normalizer that
-has to think about duplicates rather than merely tolerate them. EDI 214 brings a parser: `~`
-terminated segments, meaningful empty elements, a carrier status vocabulary to translate, and one
-interchange that has to be split into an event per shipment before anything can be keyed. The
-reefer probe is the smallest of the three and the one that cannot finish, because a device id is
-all it has.
+**S8 — Identity resolution against MongoDB, replacing the fixed list in configuration.** Every feed
+now leans on reference data and the reefer feed cannot produce a single event without it, so this is
+the last thing standing between M2 and being finished. The seam is already in place: one interface
+with three questions, one bean to swap, and no normalizer changes.
 
-`docs/samples/faults/` is the gate. Every corrupted message in it must land on `ingest.dlq.v1` and
-nowhere else, and every intact message beside it must still get through — a normalizer that rejects
-the whole file would pass a weaker version of that test while being useless.
+The work is a schema and a lookup rather than new plumbing. An assignment is a shipment, the vehicle
+carrying it and the devices fitted to it, valid over a period — which is the part configuration
+cannot express at all. A tractor pulls a different load tomorrow, a trailer with its reefer probe is
+swapped onto another vehicle mid-route, and a position stamped last Tuesday must resolve against
+what was true last Tuesday rather than what is true now. That makes the lookup a query by identifier
+*and instant*, not by identifier alone.
 
-Two things S6 leaves behind: reference data is a fixed list in configuration, so a reefer reading
-still has no route to a shipment until S8; and the three unfinished endpoints answer `503`, which
-the simulator's HTTP sink already counts as refused rather than treating as an error.
+Two things S7 leaves behind: no partially-damaged interchange exists in the committed fault
+fixtures, so that path is proved against a constructed one; and the gateway still runs from a jar
+against the cluster's published ports rather than from a manifest inside it.
