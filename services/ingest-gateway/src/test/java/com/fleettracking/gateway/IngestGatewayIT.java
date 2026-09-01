@@ -5,21 +5,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fleettracking.events.Event;
 import com.fleettracking.events.EventJson;
 import com.fleettracking.events.PositionEvent;
+import com.fleettracking.events.SourceEvent;
 import com.fleettracking.events.SourceSystem;
+import com.fleettracking.events.StatusEvent;
 import com.fleettracking.gateway.publish.Topics;
 import com.fleettracking.gateway.web.IngestResponse;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Stream;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -188,16 +196,181 @@ class IngestGatewayIT {
   }
 
   @Test
-  void aFeedWithNoNormalizerYetIsRefusedWithoutDeadLetteringGoodData() {
-    String mobile = "{\"marker\":\"mobile-probe\",\"sid\":\"SHP-LAX-0002\",\"ts\":1788169339744}";
+  void allFourFeedsLandOnTheRightTopicKeyedByTheSameShipment() {
+    // The point of the milestone, in one test. Four systems that share no format, no units, no time
+    // representation and no idea of each other's identifiers describe the same shipment, and what
+    // comes out the far side is one stream of canonical events under one key.
+    //
+    // The four captured payloads deliberately concern SHP-LAX-0002, which the fleet knows as
+    // VEH-0002 with a telematics unit TLM-0002 and a reefer probe DEV-0002. Only the phone names
+    // the shipment; telematics names the truck, the probe names itself, and the carrier's
+    // interchange names several shipments at once.
+    // Deliberately not the same captured messages the single-feed tests in this class post. Every
+    // test here drains the topics from the beginning, and a resent payload produces a byte-identical
+    // event by design, so two tests posting one payload would each see the other's record.
+    String telematics = lastFixtureLineFor("telematics.jsonl", "TLM-0002");
+    String mobile = firstFixtureLineFor("mobile-app.jsonl", "SHP-LAX-0002");
+    String reefer = firstFixtureLineFor("reefer-sensor.jsonl", "DEV-0002");
+    String edi = interchangeFor("SHP-LAX-0002");
 
-    Posted response = post("/ingest/mobile", "application/json", mobile);
+    assertThat(post("/ingest/telematics", "application/json", telematics).status()).isEqualTo(202);
+    assertThat(post("/ingest/mobile", "application/json", mobile).status()).isEqualTo(202);
+    assertThat(post("/ingest/reefer", "application/json", reefer).status()).isEqualTo(202);
+    assertThat(post("/ingest/edi214", "application/edi-x12", edi).status()).isEqualTo(202);
 
-    // Nothing is wrong with this message; the gateway is unfinished. 503 tells the producer to
-    // come back, which is true, rather than filling the rejection topic with valid data.
-    assertThat(response.status()).isEqualTo(503);
-    assertThat(drain(Topics.DEAD_LETTER))
-        .noneSatisfy(r -> assertThat(r.value()).contains("mobile-probe"));
+    List<ConsumerRecord<String, String>> positions = drain(Topics.POSITION);
+    List<ConsumerRecord<String, String>> statuses = drain(Topics.STATUS);
+
+    // Positions from the two feeds that carry coordinates.
+    assertThat(sourcesOf(positions, "SHP-LAX-0002"))
+        .contains(SourceSystem.TELEMATICS, SourceSystem.MOBILE_APP);
+    // Statuses from the two that do not: a temperature with no position, and a carrier's status
+    // with a place name and no position.
+    assertThat(sourcesOf(statuses, "SHP-LAX-0002"))
+        .contains(SourceSystem.REEFER_SENSOR, SourceSystem.EDI_214);
+
+    // Every one of them keyed by the shipment, which is what puts four dissimilar sources onto one
+    // partition and makes their relative order mean something.
+    assertThat(positions).filteredOn(r -> "SHP-LAX-0002".equals(r.key())).isNotEmpty();
+    assertThat(statuses).filteredOn(r -> "SHP-LAX-0002".equals(r.key())).isNotEmpty();
+  }
+
+  @Test
+  void oneCarrierInterchangeBecomesOneEventPerShipmentInIt() {
+    // An interchange has no shipment id of its own and therefore arrives with no Kafka key. It is
+    // only after the gateway splits it that anything can be keyed at all.
+    String batched = interchangeWithMostShipments();
+
+    Posted response = post("/ingest/edi214", "application/edi-x12", batched);
+
+    assertThat(response.status()).isEqualTo(202);
+    assertThat(response.body()).isNotNull();
+    assertThat(response.body().outcome()).isEqualTo(IngestResponse.Outcome.ACCEPTED);
+    assertThat(response.body().published()).isGreaterThan(1);
+
+    List<ConsumerRecord<String, String>> statuses =
+        drain(Topics.STATUS).stream().filter(r -> batched.equals(rawBodyOf(r))).toList();
+    assertThat(statuses).hasSize(response.body().published());
+    // One message in, several keys out, and no record left unkeyed.
+    assertThat(statuses)
+        .extracting(ConsumerRecord::key)
+        .doesNotContainNull()
+        .doesNotHaveDuplicates();
+  }
+
+  @Test
+  void aPartlyDamagedBatchPublishesWhatSurvivedAndDeadLettersTheOriginal() {
+    // Truncated in the middle of the third transaction set, leaving the first two intact. The
+    // carrier has already sent this batch and will not send it again.
+    String batched = interchangeWithMostShipments();
+    int thirdSet = batched.indexOf("ST*214*0003");
+    assertThat(thirdSet).as("fixture should carry at least three transaction sets").isPositive();
+    String truncated = batched.substring(0, thirdSet + 40);
+
+    Posted response = post("/ingest/edi214", "application/edi-x12", truncated);
+
+    assertThat(response.status()).isEqualTo(202);
+    assertThat(response.body()).isNotNull();
+    assertThat(response.body().outcome()).isEqualTo(IngestResponse.Outcome.PARTIAL);
+    assertThat(response.body().published()).isEqualTo(2);
+    assertThat(response.body().deadLettered()).isEqualTo(1);
+
+    // The two readable statuses reached the canonical topic.
+    assertThat(drain(Topics.STATUS).stream().filter(r -> truncated.equals(rawBodyOf(r))).toList())
+        .hasSize(2);
+    // And the original interchange is on the dead-letter topic whole, so nothing is lost in either
+    // direction. Replaying it later regenerates identical event ids for the two already published,
+    // which is the only reason publishing and dead-lettering one message is safe.
+    List<ConsumerRecord<String, String>> dead =
+        drain(Topics.DEAD_LETTER).stream()
+            .filter(r -> r.value().contains("transaction set 3"))
+            .toList();
+    assertThat(dead).hasSize(1);
+    assertThat(headerOf(dead.getFirst(), "fleet.source")).isEqualTo("EDI_214");
+  }
+
+  @Test
+  void aReeferReadingIsAttributedFromNothingButItsDeviceId() {
+    // Again a different captured reading from the four-feed test's, so neither sees the other's.
+    String reading = lastFixtureLineFor("reefer-sensor.jsonl", "DEV-0002");
+
+    assertThat(post("/ingest/reefer", "application/json", reading).status()).isEqualTo(202);
+
+    List<ConsumerRecord<String, String>> statuses =
+        drain(Topics.STATUS).stream().filter(r -> reading.equals(rawBodyOf(r))).toList();
+    assertThat(statuses).hasSize(1);
+
+    // The probe named a device and nothing else. The key it ended up under came entirely from
+    // reference data, which is what S8 replaces with a real lookup.
+    assertThat(statuses.getFirst().key()).isEqualTo("SHP-LAX-0002");
+    StatusEvent event =
+        (StatusEvent) EventJson.mapper().readValue(statuses.getFirst().value(), Event.class);
+    assertThat(event.deviceId()).isEqualTo("DEV-0002");
+    assertThat(event.vehicleId()).isEqualTo("VEH-0002");
+    assertThat(event.temperature().celsius()).isNotNull();
+    assertThat(event.position()).as("a probe reports no position").isNull();
+  }
+
+  // -------------------------------------------------------------------------------------------
+
+  /** The first captured payload of a feed mentioning a given identifier. */
+  private static String firstFixtureLineFor(String fixture, String identifier) {
+    return Fixtures.lines(fixture).stream()
+        .filter(line -> line.contains(identifier))
+        .findFirst()
+        .orElseThrow(() -> new IllegalStateException(identifier + " absent from " + fixture));
+  }
+
+  /** The last captured payload of a feed mentioning a given identifier. */
+  private static String lastFixtureLineFor(String fixture, String identifier) {
+    return Fixtures.lines(fixture).stream()
+        .filter(line -> line.contains(identifier))
+        .reduce((first, second) -> second)
+        .orElseThrow(() -> new IllegalStateException(identifier + " absent from " + fixture));
+  }
+
+  /**
+   * An interchange mentioning a shipment, and never the one the batch tests post — for the same
+   * reason those tests pick different captured lines: they all read the topics from the start.
+   */
+  private static String interchangeFor(String shipmentId) {
+    String usedByTheBatchTests = interchangeWithMostShipments();
+    return interchanges().stream()
+        .filter(body -> body.contains(shipmentId) && !body.equals(usedByTheBatchTests))
+        .findFirst()
+        .orElseThrow(() -> new IllegalStateException(shipmentId + " absent from the interchanges"));
+  }
+
+  /** The committed interchange batching the most shipments, chosen by content rather than by name. */
+  private static String interchangeWithMostShipments() {
+    return interchanges().stream()
+        .max(Comparator.comparingInt(body -> body.split("ST\\*214", -1).length))
+        .orElseThrow();
+  }
+
+  private static List<String> interchanges() {
+    try (Stream<Path> files = Files.list(Fixtures.samples().resolve("edi-214"))) {
+      List<String> bodies = new ArrayList<>();
+      for (Path file : files.sorted().toList()) {
+        bodies.add(Files.readString(file, StandardCharsets.UTF_8));
+      }
+      return bodies;
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  /** Which feeds produced the records on a topic for one shipment. */
+  private static List<SourceSystem> sourcesOf(
+      List<ConsumerRecord<String, String>> records, String shipmentId) {
+    return records.stream()
+        .map(r -> EventJson.mapper().readValue(r.value(), Event.class))
+        .filter(SourceEvent.class::isInstance)
+        .map(SourceEvent.class::cast)
+        .filter(e -> shipmentId.equals(e.shipmentId()))
+        .map(e -> e.raw().source())
+        .distinct()
+        .toList();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -263,9 +436,14 @@ class IngestGatewayIT {
     return collected;
   }
 
-  /** The {@code raw.body} of a published event, used to find the record a given test produced. */
+  /**
+   * The {@code raw.body} of a published event, used to find the record a given test produced.
+   *
+   * <p>Read as {@link SourceEvent} rather than as a position: since S7 the status topic carries
+   * temperatures and carrier statuses too, and the {@code raw} field is common to both envelopes.
+   */
   private static String rawBodyOf(ConsumerRecord<String, String> record) {
-    return ((PositionEvent) EventJson.mapper().readValue(record.value(), Event.class)).raw().body();
+    return ((SourceEvent) EventJson.mapper().readValue(record.value(), Event.class)).raw().body();
   }
 
   private static String headerOf(ConsumerRecord<String, String> record, String key) {

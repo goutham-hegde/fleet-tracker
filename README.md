@@ -192,21 +192,25 @@ is published to the dead-letter topic with the original bytes and a reason attac
 java -jar services/ingest-gateway/target/ingest-gateway-0.1.0-SNAPSHOT.jar
 ```
 
-| Endpoint | Feed | Knows | Status |
-|---|---|---|---|
-| `POST /ingest/telematics` | In-cab unit, nested imperial JSON | vehicle | normalized |
-| `POST /ingest/mobile` | Driver's phone, terse and unreliable | shipment | S7 |
-| `POST /ingest/edi214` | Carrier back office, batch X12 text | shipment | S7 |
-| `POST /ingest/reefer` | Trailer temperature probe | device | S7 |
+All four feeds normalize. Each breaks a different assumption, and the differences are the point:
+
+| Endpoint | Feed | Names | Produces | Has to reconcile |
+|---|---|---|---|---|
+| `POST /ingest/telematics` | In-cab unit, nested imperial JSON | vehicle | position | mph and miles to metric; satellite geometry to a radius in metres |
+| `POST /ingest/mobile` | Driver's phone, terse and unreliable | shipment | position or status | epoch millis; metres per second; duplicates and out-of-order backlogs |
+| `POST /ingest/edi214` | Carrier back office, batch X12 text | many shipments | one status **per shipment** | positional text; no coordinates, only a city; hours of filing lag |
+| `POST /ingest/reefer` | Trailer temperature probe | device | status | a device id is all it has — no shipment, no vehicle, no position |
 
 An endpoint whose normalizer is not written yet answers `503`, not a rejection — the data is fine
-and the gateway is unfinished, and dead-lettering good messages would bury the bad ones.
+and the gateway is unfinished, and dead-lettering good messages would bury the bad ones. No endpoint
+is in that state today; the behaviour remains for the next feed added.
 
-Three response outcomes, all with the body naming what happened:
+Four response outcomes, all with the body naming what happened:
 
 | Status | Meaning |
 |---|---|
 | `202 ACCEPTED` | Normalized and durably on a canonical topic. |
+| `202 PARTIAL` | Some of a batch became events and some did not. Only an EDI interchange can do this: the readable shipment statuses are published **and** the original interchange goes to `ingest.dlq.v1` whole, so neither the surviving events nor the fact of the damage is lost. Safe to replay, because event ids are derived from the payload rather than random — a replayed interchange regenerates the ids it produced before. |
 | `202 DEAD_LETTERED` | Could not be normalized; the original is durably on `ingest.dlq.v1`, with the reason. Not a `400`, because resending identical bytes cannot produce a different result — a `400` would either lose the message or invite an infinite retry loop. |
 | `503` | This platform is at fault: the broker did not acknowledge, or the feed has no normalizer. The only case where a retry can help. |
 

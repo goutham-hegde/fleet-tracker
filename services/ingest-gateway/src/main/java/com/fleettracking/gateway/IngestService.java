@@ -79,7 +79,31 @@ public class IngestService {
       case NormalizationResult.Rejected rejected ->
           deadLetter(message, rejected.reason(), rejected.detail(), null);
       case NormalizationResult.Normalized normalized -> publishAll(message, normalized.events());
+      case NormalizationResult.Partial partial -> publishAndDeadLetter(message, partial);
     };
+  }
+
+  /**
+   * A batch that was partly readable: publish what survived, and dead-letter the original whole.
+   *
+   * <p>Both, not either. The events that parsed are real freight events and a carrier does not
+   * resend a batch on request, so discarding them because a later part of the file was truncated
+   * loses information the platform will never get again. The original bytes still go to the
+   * dead-letter topic, because the alternative is publishing a partial batch and leaving no record
+   * anywhere that anything was missing.
+   *
+   * <p>Replaying that dead-letter entry later is safe, and only because event ids are derived: the
+   * transaction sets that already published regenerate byte-identical ids, and downstream
+   * de-duplication drops them. With random ids the replay would double-count every one.
+   */
+  private IngestOutcome publishAndDeadLetter(
+      InboundMessage message, NormalizationResult.Partial partial) {
+    IngestOutcome published = publishAll(message, partial.events());
+    deadLetter(message, partial.reason(), partial.detail(), null);
+    // The partial's own reason is reported rather than any per-event validation failure, because it
+    // describes the message as a whole -- which is what the producer needs to hear.
+    return new IngestOutcome(
+        published.published(), published.deadLettered() + 1, partial.reason(), partial.detail());
   }
 
   private IngestOutcome publishAll(InboundMessage message, List<SourceEvent> events) {

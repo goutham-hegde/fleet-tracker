@@ -3,7 +3,10 @@ package com.fleettracking.gateway;
 import com.fleettracking.gateway.identity.IdentityProperties;
 import com.fleettracking.gateway.identity.IdentityResolver;
 import com.fleettracking.gateway.identity.StaticIdentityResolver;
+import com.fleettracking.gateway.normalize.Edi214Normalizer;
+import com.fleettracking.gateway.normalize.MobileAppNormalizer;
 import com.fleettracking.gateway.normalize.Normalizer;
+import com.fleettracking.gateway.normalize.ReeferNormalizer;
 import com.fleettracking.gateway.normalize.TelematicsNormalizer;
 import com.fleettracking.gateway.publish.EventPublisher;
 import jakarta.validation.Validation;
@@ -79,21 +82,39 @@ public class GatewayConfig {
   }
 
   @Bean
+  public MobileAppNormalizer mobileAppNormalizer(IdentityResolver identities) {
+    return new MobileAppNormalizer(identities);
+  }
+
+  @Bean
+  public Edi214Normalizer edi214Normalizer(IdentityResolver identities) {
+    return new Edi214Normalizer(identities);
+  }
+
+  @Bean
+  public ReeferNormalizer reeferNormalizer(IdentityResolver identities) {
+    return new ReeferNormalizer(identities);
+  }
+
+  @Bean
   public EventPublisher eventPublisher(
       KafkaTemplate<String, String> kafka, GatewayProperties properties) {
     return new EventPublisher(kafka, properties.sendTimeout().toMillis());
   }
 
   /**
-   * Every normalizer on the classpath is collected here by type. S7 adds three more beans and this
-   * method is not touched — which is the point of collecting them rather than naming them.
+   * Every normalizer on the classpath is collected here by type.
+   *
+   * <p>S7 added the other three feeds and this method was not touched, which is the point of
+   * collecting them by type rather than naming them one by one. A fifth feed is a fifth bean.
    */
   @Bean
   public IngestService ingestService(
       List<Normalizer> normalizers, Validator validator, EventPublisher publisher) {
     log.info(
-        "gateway handles {} of 4 feeds: {}",
+        "gateway handles {} of {} feeds: {}",
         normalizers.size(),
+        com.fleettracking.events.SourceSystem.values().length,
         normalizers.stream().map(Normalizer::source).toList());
     return new IngestService(normalizers, validator, publisher);
   }

@@ -17,6 +17,11 @@ import jakarta.validation.Validator;
 import java.time.Instant;
 import java.util.List;
 import org.hibernate.validator.HibernateValidator;
+import com.fleettracking.events.RawPayload;
+import com.fleettracking.events.StatusCode;
+import com.fleettracking.events.StatusEvent;
+import com.fleettracking.gateway.normalize.NormalizationResult;
+import com.fleettracking.gateway.normalize.RejectionReason;
 import org.hibernate.validator.messageinterpolation.ParameterMessageInterpolator;
 import org.junit.jupiter.api.Test;
 
@@ -121,6 +126,57 @@ class IngestServiceTest {
     assertThat(publisher.published()).isEmpty();
     assertThat(publisher.deadLettered()).hasSize(1);
     assertThat(publisher.deadLettered().getFirst().detail()).contains("position.latitude");
+  }
+
+  @Test
+  void publishesWhatSurvivedAPartialBatchAndDeadLettersTheOriginalWhole() {
+    // Only a batch feed can produce this, so the normalizer is stubbed rather than driven through
+    // real EDI: what is under test here is what the service does with the third outcome, not
+    // whether the X12 parser produces it.
+    Normalizer partial =
+        new Normalizer() {
+          @Override
+          public SourceSystem source() {
+            return SourceSystem.EDI_214;
+          }
+
+          @Override
+          public NormalizationResult normalize(InboundMessage message) {
+            return new NormalizationResult.Partial(
+                List.of(event("SHP-ATL-0003"), event("SHP-HOU-0004")),
+                RejectionReason.MALFORMED_PAYLOAD,
+                "transaction set 3: truncated before SE terminator");
+          }
+        };
+
+    IngestOutcome outcome = service(partial).accept(inbound(SourceSystem.EDI_214, "ISA*..."));
+
+    // Both, not either. The statuses that parsed are real freight events a carrier will not send
+    // again, and the original bytes are the only record that anything was missing.
+    assertThat(outcome.published()).isEqualTo(2);
+    assertThat(outcome.deadLettered()).isEqualTo(1);
+    assertThat(outcome.reason()).isEqualTo(RejectionReason.MALFORMED_PAYLOAD);
+    assertThat(publisher.published()).hasSize(2);
+    assertThat(publisher.deadLettered()).hasSize(1);
+    assertThat(publisher.deadLettered().getFirst().body()).isEqualTo("ISA*...");
+  }
+
+  /** A minimal valid status event, for the cases where the payload itself is beside the point. */
+  private static StatusEvent event(String shipmentId) {
+    return new StatusEvent(
+        "id-" + shipmentId,
+        shipmentId,
+        "VEH-0003",
+        null,
+        RECEIVED,
+        RECEIVED,
+        StatusCode.ARRIVED_AT_STOP,
+        null,
+        null,
+        null,
+        null,
+        null,
+        new RawPayload(SourceSystem.EDI_214, "application/edi-x12", "ISA*..."));
   }
 
   @Test
