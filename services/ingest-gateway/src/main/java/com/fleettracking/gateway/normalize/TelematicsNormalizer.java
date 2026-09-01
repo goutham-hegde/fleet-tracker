@@ -97,7 +97,7 @@ public class TelematicsNormalizer implements Normalizer {
     if (vehicleId == null || vehicleId.isBlank()) {
       return NormalizationResult.rejected(RejectionReason.MISSING_FIELD, "vehicle.id");
     }
-    Optional<Identity> identity = identities.byVehicle(vehicleId);
+    Optional<Identity> identity = identities.byVehicle(vehicleId, occurredAt);
     if (identity.isEmpty()) {
       return NormalizationResult.rejected(
           RejectionReason.UNRESOLVED_IDENTITY, "no load assigned to vehicle " + vehicleId);

@@ -1,8 +1,7 @@
 package com.fleettracking.gateway;
 
-import com.fleettracking.gateway.identity.IdentityProperties;
 import com.fleettracking.gateway.identity.IdentityResolver;
-import com.fleettracking.gateway.identity.StaticIdentityResolver;
+import com.fleettracking.gateway.identity.MongoIdentityResolver;
 import com.fleettracking.gateway.normalize.Edi214Normalizer;
 import com.fleettracking.gateway.normalize.MobileAppNormalizer;
 import com.fleettracking.gateway.normalize.Normalizer;
@@ -21,6 +20,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.mongodb.MongoDatabaseFactory;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.kafka.core.KafkaTemplate;
 
 /**
@@ -32,7 +33,7 @@ import org.springframework.kafka.core.KafkaTemplate;
  * appear at the far end.
  */
 @Configuration
-@EnableConfigurationProperties({GatewayProperties.class, IdentityProperties.class})
+@EnableConfigurationProperties(GatewayProperties.class)
 public class GatewayConfig {
 
   private static final Logger log = LoggerFactory.getLogger(GatewayConfig.class);
@@ -69,10 +70,28 @@ public class GatewayConfig {
     return factory.getValidator();
   }
 
+  /**
+   * Identity resolution against dispatch reference data in MongoDB.
+   *
+   * <p>The count is logged at startup because the most likely way for this service to fail is not
+   * an exception -- it is an empty collection. A gateway pointed at a database nobody has seeded
+   * starts perfectly, answers every request, and dead-letters all four feeds as unresolvable, which
+   * looks like four broken normalizers. One line saying "0 assignments" at startup turns that into
+   * a five-second diagnosis. It is a count, not a validation: reference data is operational data
+   * and can legitimately be empty on a cluster nobody has dispatched to yet.
+   */
   @Bean
-  public IdentityResolver identityResolver(IdentityProperties properties) {
-    StaticIdentityResolver resolver = new StaticIdentityResolver(properties.assignments());
-    log.info("identity reference data loaded: {} vehicles assigned", resolver.size());
+  public IdentityResolver identityResolver(MongoOperations mongo, MongoDatabaseFactory factory) {
+    MongoIdentityResolver resolver = new MongoIdentityResolver(mongo);
+    // The database name is logged next to the count for a reason that cost an hour: Boot 4 renamed
+    // the connection properties, the old names bind to nothing, and the fallback default is a
+    // database called "test" on port 27017 -- which on a developer machine is frequently a real,
+    // unrelated MongoDB that accepts the connection and answers. A line naming the database turns
+    // that from a mystery into a glance.
+    log.info(
+        "identity reference data: {} assignments in MongoDB database '{}'",
+        resolver.size(),
+        factory.getMongoDatabase().getName());
     return resolver;
   }
 

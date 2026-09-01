@@ -2,6 +2,16 @@ spring:
   application:
     name: ingest-gateway
 
+  # spring.mongodb, NOT spring.data.mongodb. Spring Boot 4 moved the connection properties out of
+  # Spring Data's namespace and deprecated the old names at level "error", which means they are no
+  # longer bound -- silently. A file using the 3.x names starts perfectly and connects to the
+  # default mongodb://localhost/test, which on this machine is an unrelated mongod that answers.
+  mongodb:
+    # 37017 on the host, not 27017: that unrelated mongod owns the default port. Inside the cluster
+    # this is overridden to mongodb://mongodb.fleet.svc.cluster.local:27017.
+    uri: mongodb://localhost:37017
+    database: fleet
+
   kafka:
     # 19092 on the host, not 9092: this machine already has something on the default port, and the
     # Kind cluster publishes the broker on a non-default one for the same reason. Inside the
@@ -36,36 +46,9 @@ fleet:
     # the failure surfaces as a broker error rather than as an unexplained timeout.
     send-timeout: 15s
 
-    identity:
-      # Reference data standing in for a transport management system. These assignments match the
-      # simulator's default eight-truck fleet: trucks are dealt onto the four lanes in turn, and
-      # each carries a telematics unit (TLM-) plus, on the cold-chain lanes, a reefer probe (DEV-).
-      # S8 replaces this list with a MongoDB-backed lookup; the shape does not change.
-      assignments:
-        - shipment-id: SHP-CHI-0001
-          vehicle-id: VEH-0001
-          device-ids: [TLM-0001, DEV-0001]
-        - shipment-id: SHP-LAX-0002
-          vehicle-id: VEH-0002
-          device-ids: [TLM-0002, DEV-0002]
-        - shipment-id: SHP-ATL-0003
-          vehicle-id: VEH-0003
-          device-ids: [TLM-0003, DEV-0003]
-        - shipment-id: SHP-HOU-0004
-          vehicle-id: VEH-0004
-          device-ids: [TLM-0004, DEV-0004]
-        - shipment-id: SHP-CHI-0005
-          vehicle-id: VEH-0005
-          device-ids: [TLM-0005, DEV-0005]
-        - shipment-id: SHP-LAX-0006
-          vehicle-id: VEH-0006
-          device-ids: [TLM-0006, DEV-0006]
-        - shipment-id: SHP-ATL-0007
-          vehicle-id: VEH-0007
-          device-ids: [TLM-0007, DEV-0007]
-        - shipment-id: SHP-HOU-0008
-          vehicle-id: VEH-0008
-          device-ids: [TLM-0008, DEV-0008]
+    # Identity resolution reads dispatch reference data from the assignments collection in the
+    # database configured above. It used to be a list here; a list cannot say when an assignment
+    # starts or ends, and every feed needs that. Seed the collection with scripts/seed-identity.sh.
 
 logging:
   level:

@@ -290,7 +290,7 @@ public class Edi214Normalizer implements Normalizer {
       return Result.failed(RejectionReason.INVALID_VALUE, e.getMessage());
     }
 
-    Optional<Identity> identity = identities.byShipment(shipmentId);
+    Optional<Identity> identity = identities.byShipment(shipmentId, occurredAt);
     if (identity.isEmpty()) {
       return Result.failed(
           RejectionReason.UNRESOLVED_IDENTITY, "no vehicle assigned to shipment " + shipmentId);

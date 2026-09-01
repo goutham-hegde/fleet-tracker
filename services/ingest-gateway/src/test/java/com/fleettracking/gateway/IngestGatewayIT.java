@@ -38,14 +38,20 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import com.mongodb.client.MongoClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 /**
  * The whole gateway against a real broker: HTTP in, Kafka out.
@@ -72,6 +78,18 @@ class IngestGatewayIT {
   @Container
   static final KafkaContainer KAFKA = new KafkaContainer("apache/kafka:4.3.1");
 
+  /**
+   * Identity resolution reads dispatch reference data from MongoDB as of S8, so proving that a
+   * probe's device id reaches Kafka as a shipment id now requires a database as well as a broker.
+   * That is the honest shape of the test: the claim being made is about the deployed system, and
+   * in the deployed system that lookup is a query.
+   */
+  @Container
+  static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8.0");
+
+  @Autowired private MongoOperations mongo;
+  @Autowired private MongoClient mongoClient;
+
   @LocalServerPort private int port;
 
   /**
@@ -83,9 +101,30 @@ class IngestGatewayIT {
   private final HttpClient client = HttpClient.newHttpClient();
 
   @DynamicPropertySource
-  static void kafkaBroker(DynamicPropertyRegistry registry) {
-    // The container's port is assigned when it starts, so it cannot be written in application.yaml.
+  static void containerAddresses(DynamicPropertyRegistry registry) {
+    // Each container's port is assigned when it starts, so neither can be written in
+    // application.yaml.
     registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+    // spring.mongodb, not spring.data.mongodb: Boot 4 deprecated the Spring Data namespace for
+    // connection settings at level "error", so the old names bind to nothing at all. Registering
+    // them here would leave the default mongodb://localhost/test in place, and this test would
+    // quietly read and write the developer's own local MongoDB instead of its container.
+    registry.add("spring.mongodb.uri", MONGO::getConnectionString);
+    registry.add("spring.mongodb.database", () -> "fleet");
+  }
+
+  /**
+   * Reference data, seeded before every test.
+   *
+   * <p>Seeded here rather than assumed, because an empty collection would make every assertion in
+   * this class fail as an unresolved identity -- which reads like four broken normalizers rather
+   * than like a database nobody filled in. The assignments are open-ended and backdated well before
+   * the committed fixtures were captured; see {@link Fixtures#FLEET_EPOCH}.
+   */
+  @BeforeEach
+  void seedReferenceData() {
+    mongo.remove(new Query(), com.fleettracking.gateway.identity.Assignment.class);
+    mongo.insertAll(Fixtures.defaultFleetAssignments());
   }
 
   @BeforeAll
@@ -111,6 +150,27 @@ class IngestGatewayIT {
   }
 
   // -------------------------------------------------------------------------------------------
+
+  /**
+   * That this test is talking to its own database and not to the developer's.
+   *
+   * <p>Written after it was not. Spring Boot 4 renamed the MongoDB connection properties, and the
+   * old names bind to nothing rather than failing, so the application fell back to the default
+   * {@code mongodb://localhost/test}. This machine has an unrelated MongoDB on that port, which
+   * accepted the connection and answered every query -- so the suite passed while seeding reference
+   * data into a database belonging to something else entirely.
+   *
+   * <p>Nothing else here can catch that, because every other assertion is satisfied by any database
+   * that stores what it is given. This one asserts the address.
+   */
+  @Test
+  void connectsToItsOwnContainerAndNotToWhateverIsOnTheDefaultPort() {
+    int connectedPort =
+        mongoClient.getClusterDescription().getServerDescriptions().getFirst().getAddress().getPort();
+
+    assertThat(connectedPort).isEqualTo(MONGO.getFirstMappedPort());
+    assertThat(connectedPort).isNotEqualTo(27017);
+  }
 
   @Test
   void aSimulatedTruckPositionReachesTheCanonicalTopicKeyedByShipment() {

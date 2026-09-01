@@ -86,7 +86,7 @@ public class ReeferNormalizer implements Normalizer {
       return NormalizationResult.rejected(RejectionReason.MISSING_FIELD, "tempC");
     }
 
-    Optional<Identity> identity = identities.byDevice(deviceId);
+    Optional<Identity> identity = identities.byDevice(deviceId, payload.readingUtc());
     if (identity.isEmpty()) {
       return NormalizationResult.rejected(
           RejectionReason.UNRESOLVED_IDENTITY, "no shipment assigned to device " + deviceId);

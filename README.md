@@ -78,6 +78,7 @@ Kafka and MongoDB run inside the cluster, in the `fleet` namespace.
 
 ```bash
 ./scripts/platform-up.sh    # deploy Kafka + MongoDB + the canonical topics (idempotent)
+./scripts/seed-identity.sh  # load dispatch reference data the gateway resolves against (idempotent)
 ./scripts/smoke.sh          # prove both are reachable from the host and round-trip data
 ./scripts/platform-down.sh  # delete the namespace -- DESTROYS all Kafka and Mongo data
 ```
@@ -215,12 +216,22 @@ Four response outcomes, all with the body naming what happened:
 | `503` | This platform is at fault: the broker did not acknowledge, or the feed has no normalizer. The only case where a retry can help. |
 
 Identity resolution is what lets a feed that names only a vehicle produce an event keyed by
-shipment. Until S8 it reads a fixed list of assignments from configuration under
-`fleet.gateway.identity.assignments`, matching the simulator's default fleet.
+shipment. It reads **dispatch reference data from MongoDB**: an assignment says that a tractor
+pulled a load, wearing a given set of devices, over a stated period. Load it with
+`./scripts/seed-identity.sh` — an unseeded database is the one failure that looks like something
+else entirely, because the gateway starts cleanly and then dead-letters all four feeds as
+unresolvable.
+
+The period is what a configuration file could not express. Every lookup asks *as of the instant the
+source stated*, never as of now, so a trailer swapped onto a different tractor at noon and an EDI
+batch filed four hours after the fact both resolve to what was actually true at the time. A message
+that cannot be resolved is dead-lettered rather than guessed at: a wrongly attributed position is
+worse than a missing one, because it moves a real shipment to the wrong place on a real map.
 
 To watch the whole path end to end, start the gateway and point the simulator at it:
 
 ```bash
+./scripts/seed-identity.sh            # once per cluster, before the first run
 java -jar services/ingest-gateway/target/ingest-gateway-0.1.0-SNAPSHOT.jar &
 java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar   --fleet.simulator.emit.http.enabled=true --fleet.simulator.time-scale=60
 

@@ -1,12 +1,13 @@
 package com.fleettracking.gateway;
 
-import com.fleettracking.gateway.identity.IdentityProperties;
-import com.fleettracking.gateway.identity.StaticIdentityResolver;
+import com.fleettracking.gateway.identity.Assignment;
+import com.fleettracking.gateway.identity.InMemoryIdentityResolver;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -64,17 +65,36 @@ public final class Fixtures {
    * numbered {@code TLM-} and, on the reefer lanes, a probe numbered {@code DEV-} — the same truck
    * under two identifiers that share nothing, which is the whole reason identity resolution exists.
    */
-  public static StaticIdentityResolver defaultFleet() {
+  public static InMemoryIdentityResolver defaultFleet() {
+    return new InMemoryIdentityResolver(defaultFleetAssignments());
+  }
+
+  /**
+   * The same fleet as a list of assignments, for tests that seed a real database with it.
+   *
+   * <p>All eight are open-ended and start well before the committed fixtures were captured. That is
+   * not laziness about the temporal dimension — it is what makes these assignments usable by tests
+   * whose payloads are stamped {@code 2026-08-31}. A window starting "now" would make every
+   * fixture resolve to nothing, and the failure would look like a broken normalizer rather than
+   * like reference data that had not been backdated. Tests that are specifically about validity
+   * windows build their own assignments.
+   */
+  public static List<Assignment> defaultFleetAssignments() {
     String[] lanes = {"CHI", "LAX", "ATL", "HOU"};
-    List<IdentityProperties.Assignment> assignments = new ArrayList<>();
+    List<Assignment> assignments = new ArrayList<>();
     for (int number = 1; number <= 8; number++) {
       String suffix = "%04d".formatted(number);
       assignments.add(
-          new IdentityProperties.Assignment(
+          Assignment.of(
               "SHP-%s-%s".formatted(lanes[(number - 1) % lanes.length], suffix),
               "VEH-" + suffix,
-              List.of("TLM-" + suffix, "DEV-" + suffix)));
+              List.of("TLM-" + suffix, "DEV-" + suffix),
+              FLEET_EPOCH,
+              null));
     }
-    return new StaticIdentityResolver(assignments);
+    return assignments;
   }
+
+  /** When the standing fleet assignments begin: long before any committed fixture was captured. */
+  public static final Instant FLEET_EPOCH = Instant.parse("2026-01-01T00:00:00Z");
 }

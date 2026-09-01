@@ -97,11 +97,17 @@ public class MobileAppNormalizer implements Normalizer {
       return NormalizationResult.rejected(RejectionReason.MISSING_FIELD, "lat/lng");
     }
 
+    // Resolved before it is used, because reference data is asked about a moment and this feed's
+    // moment is buried in an epoch-millis field. It matters more here than anywhere: the app
+    // buffers through a connectivity gap and dumps the backlog afterwards, so a message read now
+    // routinely describes something that happened well before now.
+    Instant occurredAt = Instant.ofEpochMilli(payload.timestampMillis());
+
     // The app names the shipment, so reference data is asked the opposite question to the one
     // telematics asks it. The vehicle is not decoration: the canonical envelopes require it, because
     // a downstream consumer joining position to a trailer's reefer probe has only the vehicle to
     // join on.
-    Optional<Identity> identity = identities.byShipment(shipmentId);
+    Optional<Identity> identity = identities.byShipment(shipmentId, occurredAt);
     if (identity.isEmpty()) {
       return NormalizationResult.rejected(
           RejectionReason.UNRESOLVED_IDENTITY, "no vehicle assigned to shipment " + shipmentId);
@@ -114,7 +120,6 @@ public class MobileAppNormalizer implements Normalizer {
       return NormalizationResult.rejected(RejectionReason.INVALID_VALUE, e.getMessage());
     }
 
-    Instant occurredAt = Instant.ofEpochMilli(payload.timestampMillis());
     // The event kind is part of the identity, not just the payload. A driver tapping "arrived" in
     // the same second the app sends its routine ping produces two genuinely different events with
     // one timestamp, and without this they would collapse into one id and one of them would vanish
