@@ -3,21 +3,21 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-03 · **Current position:** M3 in progress, session S10 of 24
+**Last updated:** 2026-09-03 · **Current position:** M3 complete, session S11 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
-M3 ███████░░░  2/3              ← in progress
-M4 ░░░░░░░░░░  0/2
+M3 ██████████  3/3              complete
+M4 ░░░░░░░░░░  0/2              ← next
 M5 ░░░░░░░░░░  0/3
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               10/24 sessions
+               11/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -93,14 +93,18 @@ This is the core product — everything before it is plumbing.
 
 - [x] **S9** — Position persistence + time-series collection
 - [x] **S10** — Geofencing with dwell thresholds
-- [ ] **S11** — ETA calculation
+- [x] **S11** — ETA calculation
 
 **Exit criteria**
 
 - [x] Time-series collection grows and current position tracks live under simulator load
 - [x] A scripted geofence crossing produces **exactly one** arrival and **one** departure
-- [ ] ETA converges on approach and does not thrash on GPS noise
+- [x] ETA converges on approach and does not thrash on GPS noise
 - [x] Kill and restart the processor mid-run: no duplicate arrivals, no lost positions
+
+**All four criteria pass as of 2026-09-03. M3 is complete and M4 is unblocked.** The platform now
+knows where every shipment is, which of its stops it has cleared, and when it will reach the next
+one — the three things every later milestone is a consumer of.
 
 ---
 
@@ -1017,18 +1021,121 @@ restarted.
 
 ---
 
+## S11 — Saying when, without saying it too often
+
+**2026-09-03 · M3**
+
+The processor now answers the question a customer actually asks. It watches a shipment's positions,
+works out how much road is left to its next stop and how fast the truck has really been travelling,
+and publishes `EtaUpdated` onto `shipment.derived.v1` — but only when the answer has moved enough
+to be worth anyone's attention.
+
+The exit criterion was the design brief: the estimate has to **converge on approach** and **not
+thrash on GPS noise**, and those pull against each other. Something that answers every fix is
+responsive and jitters by minutes; something smoothed enough to sit still is calm and is still
+claiming two hours out when the truck is at the gate. **M3 is now complete.**
+
+**Built**
+
+- **`EtaCalculator`** — the whole model, with no I/O in it, so every awkward case is a unit test that
+  runs in milliseconds. It resolves the two demands by noticing they are about different quantities:
+  convergence comes from the *distance*, which shrinks to nothing and is measured afresh on every
+  fix; stability comes from the *speed*, which is a property of the truck rather than of any one
+  measurement, and is the only thing that is smoothed.
+- **The speed model** — a time-decayed average of the ground speed reported *while the truck is
+  moving*. The decay is a half-life in event time, not a weight per message, which is what makes one
+  setting mean the same thing for telematics reporting every ten seconds and a phone reporting every
+  two minutes.
+- **`EtaState` and `EtaStateStore`** — one document per shipment holding both the current estimate
+  and the model behind it, cached in memory and written only when something is published. The one
+  cache in this service, for a reason the earlier two did not have: this is not reference data
+  somebody else maintains, it is this consumer's own state.
+- **`ShipmentProgress`** — what geofencing concluded, handed forward rather than looked up again:
+  which stop is next, and whether the truck is currently inside a fence.
+- **A confidence score** — four independent doubts multiplied together: how much movement the speed
+  has been learned from, how long since the last fix, how long since the truck was last seen moving,
+  and what the fix says about its own accuracy.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| The speed is learned from **moving fixes only** | A running average of every reported speed, zeros included | This is the one that looks pedantic and is not. A truck at a red light reports zero, which drags the average down, which stretches the remaining journey — so five minutes at a light adds an *hour* to a three-hour estimate and then takes twenty minutes to work back out. Nothing about the road changed. A halt needs no representation in the speed at all, because it represents itself: the estimate is anchored to the fix's own instant, so a truck standing still for half an hour has its arrival slip by half an hour, which is the truth |
+| Smoothing has a **half-life in time**, not a weight per message | A fixed blend weight, or an average of the last N fixes | The two feeds that carry positions are nothing alike. Six fixes of history is a minute of telematics and a quarter of an hour of a driver's phone, so one setting would mean two very different things — and a shipment that switched feeds mid-leg would change behaviour without anything changing in the configuration |
+| The estimate is for the **next stop only** | One per remaining stop, or one for the final destination | The seeded plan carries no service times. An estimate for the stop after next would be a real driving time plus an invented wait at the stop in between, and there would be no way to tell from the event which part was which. A destination ETA becomes honest the moment the itinerary carries planned dwell — which the committed lane catalogue already holds and the seeding script does not yet load |
+| **Nothing is published while the truck is at a stop** | Keep estimating the next stop through the dwell | Same reason. The platform does not know when this truck leaves, so between arrival and departure the only honest answer is silence. The estimate resumes at the departure, which is the first moment the question can be answered |
+| Distance is the straight line **inflated by a road-circuity factor** | Divide the straight-line distance by the reported speed | The simulator bills its trucks against a road eighteen per cent longer than the line they drive, precisely so this cannot cheat. A short-line ETA would be short by that same eighteen per cent on every leg while looking excellent, because the fleet would be cheating in exactly the way the calculation assumed. The factor is a stated assumption, and is where a real deployment puts a routing engine |
+| An estimate is published only when it **moves past a threshold** | Publish on every fix; or on a fixed timer | The event type has carried `previousEstimate` since S2 for exactly this: the size of the change is part of what the event says. Two minutes sits under the three-minute dwell threshold, so an estimate can never be wrong by more than the length of the stop it is predicting. A timer would be silent about a truck that has just lost an hour and chatty about one that has not moved |
+| The estimate's id is derived from the **fix that caused it** | Derive it from the estimate, as arrivals derive theirs from the crossing instant | The opposite way round from an arrival, and it has to be. An arrival is a fact about one moment, so that moment names it. An estimate is an opinion that gets restated, and two consecutive fixes can perfectly well predict the same arrival time while being two different statements about two different positions — naming them by their content would silently collapse them into one |
+| The model is **cached in memory and written on publish** | Persist it on every position | It is advanced by every fix, so persisting it would add a third write to the busiest path in the platform, where there are two. The cost of not doing so is that a restart resumes from the model as it stood at the last publish — a few minutes of staleness in a quantity that is deliberately smoothed over minutes, and the confidence on the next event reports it |
+
+**Surprises**
+
+- **One of the four confidence terms was silently contributing nothing.** "How long since the last
+  fix" was being measured against the state *after* the new fix had been folded into it — where the
+  last fix is, by definition, the one being handled, so the gap was always zero. It was caught by an
+  unrelated test whose threshold was one hundredth too high. Nothing about the output looked wrong:
+  confidence still varied, because three other terms still worked. **A defect in one factor of a
+  product is invisible from the outside as long as the other factors move.**
+- **The clean run is not the quiet one.** A test asserted that a truck with exact fixes and the same
+  truck with six metres of GPS wobble would publish the same estimates. They do not. Six metres
+  shifts an estimate by about a quarter of a second — but publishing is a *threshold crossing*, so a
+  sub-second nudge changes which fix happens to cross it, and the entire subsequent schedule
+  diverges. Both runs publish under five per cent of their fixes, which is the property that was
+  actually meant; the test now says that instead.
+- **The estimate stream quiets by itself as a truck closes in.** Nothing was written to make it do
+  that. On the Chicago-to-Memphis leg it published fifteen estimates in the first hour, ten in the
+  second, five in the third and three in the last — because a shrinking distance divided by a
+  settled speed produces a number that stops changing. Convergence turned out to be visible in the
+  event *rate*, not only in the error.
+- **The new events broke a test that had nothing to do with them.** S10's geofence test told an
+  arrival from a departure by looking for a `dwell` field. Estimates land on the same topic and have
+  no dwell, so every estimate published on the approach counted as an arrival, and "exactly one
+  arrival" would have started failing for reasons entirely unrelated to geofencing. **Adding a third
+  event type to a shared topic is a change to every consumer of it**, including the tests.
+
+**Verified against the cluster**
+
+Four trucks, four lanes, routes run to completion: 5,606 messages through the gateway, none dropped,
+5,297 positions stored.
+
+- Geofencing unchanged from S10 — 15 arrivals and 11 departures, matching ground truth exactly once
+  the four origin arrivals are accounted for
+- 664 estimates from 5,297 positions: **13%**, with a median revision of 2.8 minutes
+- Only **33%** of consecutive revisions reverse direction; pure oscillation would be 50%
+- Error against the arrivals that actually happened, by distance still to run: **6.2 min** median
+  beyond 300 km, **2.5 min** from 100-300 km, **1.2 min** from 25-100 km, **0.6 min** inside 25 km
+- Every one of the 11 arrivals had its last published estimate within **2 minutes** of the truth
+- 768 messages on the derived topic across every run of the session, with 768 distinct event ids
+
+**A caveat worth stating plainly.** The platform assumes roads are 18% longer than the straight
+line, and the simulator bills its trucks against the same figure. The absolute accuracy above is
+therefore flattered: it measures the estimate's behaviour, not its road model. What the numbers
+honestly demonstrate is convergence and stability, which is what the exit criterion asks for.
+
+**Left open**
+
+- **The stored estimate goes stale between publishes.** `estimatedArrival` stays accurate, but
+  `remainingKm` is whatever it was when the estimate last moved — so a shipment five kilometres from
+  its stop can have a document saying a hundred. A dashboard reading that field would be wrong.
+  Either publish on a slow heartbeat as well as on change, or write the document on every fix and
+  accept the third write.
+- **No estimate for the final destination**, which is the one a customer asks for. It needs planned
+  service times, which `docs/samples/lanes.json` already carries as `dwellSeconds` and which
+  `scripts/seed-itinerary.sh` does not load.
+- `scheduledArrival` is still not populated on arrivals, so lateness cannot be judged — the same
+  gap S10 left, and M4's SLA rules need it closed.
+- A geofence is still a circle around a point, and nothing is containerized.
+
+---
+
 ## Next up
 
-**S11 — ETA calculation**, and the last of M3. The platform knows where a shipment is and which
-stops it has cleared; S11 makes it say when the next one will be reached.
+**S12 — Polymorphic manifests**, the first session of M4 and the point where the "why MongoDB"
+argument stops being asserted and becomes demonstrable. Four freight modes — pharma cold-chain,
+retail DC replenishment, LTL and parcel — share almost no manifest fields, and all four must live in
+one collection, be queryable, and be validated per customer on write.
 
-The exit criterion is the interesting part: the ETA must **converge on approach and not thrash on
-GPS noise**. Those pull against each other. An estimate that reacts to every fix is responsive and
-jitters by minutes while a truck idles; one that is heavily smoothed is stable and still claims two
-hours out when the truck is at the gate. The remaining stops come from the same itinerary
-geofencing now reads, and the distance model has to bill against a road 18% longer than the straight
-line — the simulator's trucks are held to that, and an ETA that assumes the short line would look
-excellent for entirely the wrong reason.
-
-S10 leaves behind: no scheduled times on the itinerary, so nothing can yet judge lateness; circular
-geofences only; and nothing containerized.
+M3 leaves behind: the stored estimate's `remainingKm` going stale between publishes; no destination
+ETA, which needs the planned dwell times the lane catalogue already carries; no `scheduledArrival`
+on arrivals, which M4's SLA rules will need; circular geofences only; and nothing containerized.
