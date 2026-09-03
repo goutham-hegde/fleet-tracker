@@ -3,21 +3,21 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-03 · **Current position:** M3 in progress, session S9 of 24
+**Last updated:** 2026-09-03 · **Current position:** M3 in progress, session S10 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
-M3 ███░░░░░░░  1/3              ← in progress
+M3 ███████░░░  2/3              ← in progress
 M4 ░░░░░░░░░░  0/2
 M5 ░░░░░░░░░░  0/3
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                9/24 sessions
+               10/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -92,15 +92,15 @@ true at the time.
 This is the core product — everything before it is plumbing.
 
 - [x] **S9** — Position persistence + time-series collection
-- [ ] **S10** — Geofencing with dwell thresholds
+- [x] **S10** — Geofencing with dwell thresholds
 - [ ] **S11** — ETA calculation
 
 **Exit criteria**
 
 - [x] Time-series collection grows and current position tracks live under simulator load
-- [ ] A scripted geofence crossing produces **exactly one** arrival and **one** departure
+- [x] A scripted geofence crossing produces **exactly one** arrival and **one** departure
 - [ ] ETA converges on approach and does not thrash on GPS noise
-- [ ] Kill and restart the processor mid-run: no duplicate arrivals, no lost positions
+- [x] Kill and restart the processor mid-run: no duplicate arrivals, no lost positions
 
 ---
 
@@ -918,20 +918,117 @@ tracks live, verified against the real cluster rather than only in tests.
 
 ---
 
+## S10 — Geofencing: rediscovering arrivals from noisy positions
+
+**2026-09-03 · M3**
+
+The processor now concludes things rather than only recording them. It watches positions cross the
+geofence around each scheduled stop and publishes `ShipmentArrived` and `ShipmentDeparted` onto
+`shipment.derived.v1` — the first events on this platform that no source ever sent.
+
+The difficulty was never the geometry. The simulator knows exactly when each truck arrives, and the
+platform is not allowed to look: it has to rediscover the same events from fixes that are wrong by a
+few metres, all the time, and get the count exactly right. **Two of M3's four exit criteria now
+pass**, including the one this session existed for.
+
+**Built**
+
+- **`Geofencer`** — the state machine, with no I/O in it, so every hard case is a unit test that runs
+  in milliseconds. Three independent defences against noise: hysteresis (enter at the radius, leave
+  only past a wider one), a dwell threshold applied in both directions, and an accuracy gate that
+  refuses to consult a fix whose own error bar is a large fraction of the fence.
+- **`GeofenceState`** — one document per shipment-and-stop, holding whether the vehicle is inside,
+  when it crossed, and whether each event has been announced. In the database rather than in memory,
+  because "exactly one arrival" has to survive a restart, and a truck spends most of an hour parked
+  inside a fence.
+- **`Itinerary` and `ItineraryStore`** — the scheduled stops, read from reference data. One primary
+  key lookup per position, uncached, on the same reasoning S8 used for identity.
+- **`LaneExport` and `docs/samples/lanes.json`** — the lane catalogue written out from the
+  simulator's definitions and committed, so stop coordinates have exactly one home. A test compares
+  the committed file against what the exporter produces now.
+- **`scripts/seed-itinerary.sh`** — loads that file into MongoDB, deriving each load's lane from its
+  own id by the same rule the simulator names loads with. Idempotent; 64 itineraries, 240 stops.
+- **`DerivedEventIds` and `DerivedEventPublisher`** — derived ids for concluded events, and the
+  producer for the derived topic, keyed by shipment like everything else.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| **Hysteresis, dwell and an accuracy gate together** | A dwell threshold alone; or requiring N consecutive fixes on one side | Hysteresis does most of the work and costs nothing: entering and leaving stop being the same threshold, so no amount of noise can toggle the state. Dwell alone leaves a truck parked exactly on the line resetting its own timer indefinitely. A consecutive-fix count means wildly different amounts of real time per feed — five fixes is fifteen seconds of telematics and can be an hour of a silent mobile app |
+| Geofence state lives **in MongoDB**, and the derived event id is **derived** | State in memory, rebuilt at startup by replaying the derived topic; or in memory only | In memory only, a restart re-announces the arrival of every truck currently parked, which fails the exit criterion outright. Rebuilding from the topic makes correctness depend on a retention setting. Persisting it is a write per state *change*, not per position, and the derived id makes the remaining race harmless |
+| **Publish the event, then record that it was published** | Record first, publish second | There is no transaction across Kafka and MongoDB, so one order has to be chosen. Recording first can lose an arrival permanently and silently, because the state then says the job is done and nothing will revisit it. Publishing first can repeat one — and a repeat is byte-identical, because the id is derived from the shipment, the stop and the crossing instant. "Exactly one arrival" survives as a statement about distinct event ids, which is the only form of it that outlives a power cut |
+| The arrival is stamped with **when the vehicle crossed in** | When the dwell threshold expired and we became sure | Those differ by the threshold. Using the later one would make every arrival on the platform look three minutes late against its schedule — a systematic bias introduced by the detector, in the field an SLA rule will read |
+| **Every stop is evaluated on every fix** | Only the next unvisited stop | It costs a few lines of arithmetic, and it means the geofencer never has to be right about which stop a truck is heading for — genuinely hard when a route is run out of order or a driver diverts. A completed stop returns immediately, and a fix far from a fence changes nothing |
+| Stop coordinates are **exported from the simulator and committed** | Retype them into the seeding script; or share a module between simulator and service | Fifteen stops of latitude and longitude maintained in two places, where a transposed digit fails no build and surfaces as a geofence that never fires, is the trap S8 removed from identity data. Sharing a module would make a production service depend on a test tool and bake four demo lanes into it |
+| Distance is **duplicated** rather than shared with the simulator | Call the simulator's implementation | The simulator is the thing being measured and the geofencer is the ruler. If both used one formula, an error in it would move the trucks and the fences by the same amount and every test would still pass |
+| A stop arrived at and departed from is **terminal** | Reopen it if the vehicle returns | A truck returning to a yard it has already served is a second visit the itinerary cannot express, and inventing an arrival for it would break the exit criterion for a case the plan does not describe |
+
+**Surprises**
+
+- **The consumer group was never the one the configuration named.** `@KafkaListener(id = "…")`
+  silently overrides `spring.kafka.consumer.group-id`, so the service had been running in a group
+  called `position-events` while its configuration — carefully commented, explaining that the group
+  is the unit of work-sharing — said `tracking-processor`. Nothing reported the disagreement, and
+  everything worked. It surfaced only when resetting the configured group's offsets replayed
+  nothing, because that group had never existed. **The group id is the name a deployment is operated
+  by**: lag, offset resets, and which services share work all reference it, so a group whose real
+  name is an annotation's side effect is one nobody can operate. Fixed with `idIsGroup = false`.
+- **The write-per-fix that the code documented itself as avoiding.** Every fix updated the state's
+  "last fix seen" field, so the state always differed from what was stored and was always written —
+  meaning a truck on an eight-hour leg wrote a row per stop per fix for stops hundreds of miles away.
+  The comment asserting this did not happen sat directly above the code that did it. It was caught
+  by an integration test asserting that a stop the truck never approached has **no** state row.
+- **The time-series guard fired, on an operator's mistake rather than a programmer's.** Dropping
+  `position.history` while a consumer was still running let that consumer's next insert recreate it
+  as an ordinary collection, silently. The next restart refused to start and said exactly why. The
+  guard was written in S9 against a hypothetical; it caught a real one within a day.
+- **The platform reports four arrivals the simulator's ground truth does not contain.** They are the
+  origin stops. A truck begins its life already inside its pickup's geofence rather than crossing
+  into it, so the simulator never records an arrival there, while the platform quite reasonably
+  concludes that a vehicle sitting in a yard for an hour has arrived. Departures match exactly. This
+  is a difference in definition rather than a defect, and it is worth knowing before an SLA rule in
+  M4 counts stops.
+
+**Verified against the cluster**
+
+Four trucks, four lanes, routes run to completion, with the processor hard-killed mid-route and
+restarted.
+
+- 15 geofence state rows for 15 scheduled stops — exactly one per stop, none duplicated
+- 15 arrivals and 11 departures announced; 11 departures is every stop but each route's last, which
+  matches the simulator's ground truth exactly
+- The restarted processor announced **no** further arrivals for stops already announced
+- The derived topic holds 78 messages with 78 distinct event ids across every run of the session:
+  nothing published twice
+- 7,863 measurements, and the history is still a time-series collection
+
+**Left open**
+
+- `scheduledArrival` is not populated on arrivals. The itinerary carries no planned times, because
+  nothing generates a dispatch plan with per-shipment start instants. The field is optional
+  precisely so a platform that does not know the schedule says so rather than inventing one, but
+  lateness cannot be judged until it is filled in — which M4's SLA rules will need.
+- A geofence is a circle around a point. Real facilities are polygons, and a long, thin yard is
+  poorly served by either a radius that covers it or one that fits inside it.
+- Nothing is containerized yet; the gateway and the processor still run from jars on the host.
+- The lane catalogue is committed but the seeding script reads it from a path relative to the repo,
+  so seeding a real deployment would need it published somewhere a cluster can reach.
+
+---
+
 ## Next up
 
-**S10 — Geofencing with dwell thresholds.** The processor records where every shipment is and has
-been. S10 makes it notice something: that a truck has *arrived* somewhere, and later that it has
-*left*.
+**S11 — ETA calculation**, and the last of M3. The platform knows where a shipment is and which
+stops it has cleared; S11 makes it say when the next one will be reached.
 
-The difficulty is not the geometry. It is that the simulator knows the truth and the platform must
-not be allowed to peek at it. Arrivals and departures exist in the simulator as explicit transitions;
-the geofencer has to rediscover them from noisy positions alone — GPS noise is on by default at 6 m —
-and produce **exactly one** arrival and **one** departure per stop. A truck idling on the edge of a
-fence will otherwise flap between inside and outside, which is what a dwell threshold is for.
+The exit criterion is the interesting part: the ETA must **converge on approach and not thrash on
+GPS noise**. Those pull against each other. An estimate that reacts to every fix is responsive and
+jitters by minutes while a truck idles; one that is heavily smoothed is stable and still claims two
+hours out when the truck is at the gate. The remaining stops come from the same itinerary
+geofencing now reads, and the distance model has to bill against a road 18% longer than the straight
+line — the simulator's trucks are held to that, and an ETA that assumes the short line would look
+excellent for entirely the wrong reason.
 
-That is also what finally settles S9's restart criterion: once arrivals exist, killing the processor
-mid-run must not produce a second one.
-
-S9 leaves behind: nothing containerized, a bounded duplicate window that a sufficiently separated
-repeat would slip through, and the still-missing partially-damaged EDI fixture.
+S10 leaves behind: no scheduled times on the itinerary, so nothing can yet judge lateness; circular
+geofences only; and nothing containerized.
