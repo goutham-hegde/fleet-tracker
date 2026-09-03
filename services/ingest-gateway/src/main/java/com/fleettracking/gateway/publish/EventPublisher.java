@@ -4,6 +4,7 @@ import com.fleettracking.events.EventJson;
 import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.SourceEvent;
 import com.fleettracking.events.StatusEvent;
+import com.fleettracking.events.Topics;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;

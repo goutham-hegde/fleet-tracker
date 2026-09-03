@@ -64,6 +64,11 @@ spec:
               # feeds: nothing consumes it in order or in isolation, and each
               # message records its own source as a header.
               create ingest.dlq.v1         3
+              # Position events the tracking-processor could not store. Separate
+              # from ingest.dlq.v1 on purpose: that one holds bad data a carrier
+              # sent, which is routine, while an entry here means something
+              # inside the platform produced an event that should not exist.
+              create tracking.dlq.v1       3
 
               echo "--- topics now on the cluster ---"
               /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BS" --list

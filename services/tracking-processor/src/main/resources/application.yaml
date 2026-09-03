@@ -1,0 +1,97 @@
+spring:
+  application:
+    name: tracking-processor
+
+  main:
+    # No HTTP surface: this service is driven by a topic, not by callers. The Kafka listener
+    # container keeps the JVM alive; see TrackingProcessorApplication.
+    web-application-type: none
+
+  # spring.mongodb, NOT spring.data.mongodb. Spring Boot 4 moved the connection properties out of
+  # Spring Data's namespace and deprecated the old names at level "error", which means they are no
+  # longer bound -- silently, with the default mongodb://localhost/test left in place.
+  mongodb:
+    # 37017 on the host, not 27017: an unrelated mongod owns the default port on this machine.
+    # Inside the cluster this is overridden to mongodb://mongodb.fleet.svc.cluster.local:27017.
+    uri: mongodb://localhost:37017
+    database: fleet
+
+  kafka:
+    # 19092 on the host, matching what the Kind cluster publishes the broker on.
+    bootstrap-servers: localhost:19092
+
+    consumer:
+      # The group is the unit of work-sharing and of stream position. Every instance of this
+      # service uses this name, so the twelve partitions of the position topic are divided among
+      # them and each event is stored once. A service that wants its own independent copy of the
+      # stream -- the archiver, later -- uses a different name and is unaffected by this one.
+      group-id: tracking-processor
+
+      # Where a group with no committed offsets starts. "earliest" means a brand new deployment
+      # backfills the whole retained stream rather than silently ignoring everything that happened
+      # before it existed, which for a position history is the only defensible answer: "latest"
+      # would leave a hole nobody could ever tell was there.
+      auto-offset-reset: earliest
+
+      # Offsets are committed by the listener container after a batch of records has been handled,
+      # never by a background timer. Auto-commit acknowledges records the moment they are handed
+      # over, so a crash mid-batch loses everything already acknowledged but not yet stored --
+      # exactly the data loss this service exists to prevent. Spring turns this off for container
+      # listeners anyway; it is stated because it is load-bearing rather than incidental.
+      enable-auto-commit: false
+
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Strings, not a JSON deserializer. A record that fails to deserialize inside the framework
+      # never reaches the listener, so the dead-letter path that exists for exactly that record
+      # would never run. Parsing in the listener also keeps this service on the shared EventJson
+      # mapper rather than on one a deserializer built for itself.
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+      max-poll-records: 500
+
+    producer:
+      # Only the dead-letter topic is produced to, but the same durability rules apply: an
+      # unacknowledged dead letter that the consumer then commits past is a record that exists
+      # nowhere at all.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+
+    listener:
+      # One consumer thread per instance to begin with. Raising this splits the assigned partitions
+      # across threads inside one process, which is the cheap way to scale before adding pods; the
+      # ceiling either way is the topic's twelve partitions.
+      concurrency: 1
+
+      # Offsets are committed after the whole polled batch has been handled. The alternative,
+      # committing per record, would shrink the window in which a crash causes redelivery -- but
+      # the window's size does not matter here, because PartitionGuard makes a redelivered record
+      # harmless rather than merely unlikely. Paying a commit per position event to narrow a window
+      # that is already handled would be paying twice.
+      ack-mode: batch
+
+      # Fail loudly at startup if the topic is not on the broker. The default is to start anyway
+      # and wait, which for a mistyped or uncreated topic means a service that looks healthy for
+      # ever and consumes nothing -- the exact silent failure the topic-name constants exist to
+      # prevent. Topics are created by the kafka-topics Job, so a missing one is a real deployment
+      # fault worth crashing on.
+      missing-topics-fatal: true
+
+fleet:
+  tracking:
+    # Comfortably long enough not to spin against a database that is restarting, short enough that
+    # a stalled partition resumes promptly once it comes back.
+    retry-backoff: 5s
+    send-timeout: 15s
+    heartbeat-interval: 30s
+
+    # Event ids remembered per partition, so a message the mobile app sent twice is stored once.
+    # It only has to span one backlog burst -- seconds, not hours -- so this is far more history
+    # than the case needs. Twelve partitions at this size is a few megabytes and no I/O at all.
+    recent-event-ids: 2000
+
+logging:
+  level:
+    com.fleettracking: INFO

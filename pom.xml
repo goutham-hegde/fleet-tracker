@@ -15,6 +15,7 @@
   <modules>
     <module>libs/events</module>
     <module>services/ingest-gateway</module>
+    <module>services/tracking-processor</module>
     <module>tools/fleet-simulator</module>
   </modules>
 

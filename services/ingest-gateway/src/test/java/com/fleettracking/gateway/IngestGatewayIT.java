@@ -8,7 +8,7 @@ import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.SourceEvent;
 import com.fleettracking.events.SourceSystem;
 import com.fleettracking.events.StatusEvent;
-import com.fleettracking.gateway.publish.Topics;
+import com.fleettracking.events.Topics;
 import com.fleettracking.gateway.web.IngestResponse;
 import java.io.IOException;
 import java.io.UncheckedIOException;
