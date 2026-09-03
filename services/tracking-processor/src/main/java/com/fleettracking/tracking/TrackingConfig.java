@@ -3,6 +3,11 @@ package com.fleettracking.tracking;
 import com.fleettracking.tracking.consume.PartitionGuard;
 import com.fleettracking.tracking.consume.PositionConsumer;
 import com.fleettracking.tracking.consume.RecentEventIds;
+import com.fleettracking.tracking.geofence.DerivedEventPublisher;
+import com.fleettracking.tracking.geofence.GeofenceService;
+import com.fleettracking.tracking.geofence.GeofenceStateStore;
+import com.fleettracking.tracking.geofence.Geofencer;
+import com.fleettracking.tracking.itinerary.ItineraryStore;
 import com.fleettracking.tracking.consume.TrackingDeadLetters;
 import com.fleettracking.tracking.store.PositionStore;
 import java.time.Clock;
@@ -95,13 +100,61 @@ public class TrackingConfig {
     return new TrackingDeadLetters(kafka, properties.sendTimeout().toMillis());
   }
 
+  /**
+   * The scheduled stops, read from reference data seeded by {@code scripts/seed-itinerary.sh}.
+   *
+   * <p>The count is logged at startup for the reason S8 established: a service that silently found
+   * no reference data looks identical to one that is working, right up until nobody ever arrives
+   * anywhere.
+   */
+  @Bean
+  public ItineraryStore itineraryStore(MongoOperations mongo) {
+    ItineraryStore store = new ItineraryStore(mongo);
+    long planned = store.count();
+    if (planned == 0) {
+      log.warn(
+          "no itineraries found: geofencing will announce nothing. Run ./scripts/seed-itinerary.sh");
+    } else {
+      log.info("itineraries: {} shipments have a plan", planned);
+    }
+    return store;
+  }
+
+  @Bean
+  public GeofenceStateStore geofenceStateStore(MongoOperations mongo) {
+    GeofenceStateStore store = new GeofenceStateStore(mongo);
+    store.ensureIndexes();
+    return store;
+  }
+
+  @Bean
+  public Geofencer geofencer(TrackingProperties properties) {
+    return new Geofencer(properties.dwellThreshold());
+  }
+
+  @Bean
+  public DerivedEventPublisher derivedEventPublisher(
+      KafkaTemplate<String, String> kafka, TrackingProperties properties) {
+    return new DerivedEventPublisher(kafka, properties.sendTimeout().toMillis());
+  }
+
+  @Bean
+  public GeofenceService geofenceService(
+      ItineraryStore itineraries,
+      GeofenceStateStore states,
+      Geofencer geofencer,
+      DerivedEventPublisher publisher) {
+    return new GeofenceService(itineraries, states, geofencer, publisher);
+  }
+
   @Bean
   public PositionConsumer positionConsumer(
       PositionStore store,
       PartitionGuard guard,
       RecentEventIds recentEventIds,
+      GeofenceService geofence,
       TrackingDeadLetters deadLetters) {
-    return new PositionConsumer(store, guard, recentEventIds, deadLetters);
+    return new PositionConsumer(store, guard, recentEventIds, geofence, deadLetters);
   }
 
   /**
@@ -144,7 +197,10 @@ public class TrackingConfig {
    */
   @Bean
   public TrackingHeartbeat trackingHeartbeat(
-      PositionConsumer consumer, PositionStore store, TrackingProperties properties) {
-    return new TrackingHeartbeat(consumer, store, properties.heartbeatInterval());
+      PositionConsumer consumer,
+      PositionStore store,
+      GeofenceService geofence,
+      TrackingProperties properties) {
+    return new TrackingHeartbeat(consumer, store, geofence, properties.heartbeatInterval());
   }
 }

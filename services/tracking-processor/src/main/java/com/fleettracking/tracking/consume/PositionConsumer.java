@@ -3,6 +3,7 @@ package com.fleettracking.tracking.consume;
 import com.fleettracking.events.EventJson;
 import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.Topics;
+import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.store.PositionStore;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -57,6 +58,7 @@ public class PositionConsumer {
   private final PositionStore store;
   private final PartitionGuard guard;
   private final RecentEventIds recentEventIds;
+  private final GeofenceService geofence;
   private final TrackingDeadLetters deadLetters;
 
   private final AtomicLong stored = new AtomicLong();
@@ -67,10 +69,12 @@ public class PositionConsumer {
       PositionStore store,
       PartitionGuard guard,
       RecentEventIds recentEventIds,
+      GeofenceService geofence,
       TrackingDeadLetters deadLetters) {
     this.store = store;
     this.guard = guard;
     this.recentEventIds = recentEventIds;
+    this.geofence = geofence;
     this.deadLetters = deadLetters;
   }
 
@@ -82,7 +86,21 @@ public class PositionConsumer {
    * and anything it throws will be retried rather than skipped — see the error handler in
    * {@code TrackingConfig}.
    */
-  @KafkaListener(topics = Topics.POSITION, id = "position-events")
+  /**
+   * {@code idIsGroup = false} is load-bearing and was added after it bit.
+   *
+   * <p>By default Spring Kafka uses a listener's {@code id} as its consumer group id, silently
+   * overriding {@code spring.kafka.consumer.group-id}. So this service ran in a group called
+   * {@code position-events} while its configuration said {@code tracking-processor}, and nothing
+   * anywhere reported the disagreement — the service worked perfectly, in the wrong group. It
+   * surfaced only when resetting the configured group's offsets replayed nothing, because that
+   * group had never existed.
+   *
+   * <p>That is worse than cosmetic. The group id is the identity a deployment is operated by:
+   * inspecting lag, resetting offsets, and knowing which services share work all name it. A group
+   * whose real name is an implementation detail of an annotation is one nobody can operate.
+   */
+  @KafkaListener(topics = Topics.POSITION, id = "position-events", idIsGroup = false)
   public void onPositionEvent(ConsumerRecord<String, String> record) {
     PositionEvent event;
     try {
@@ -128,6 +146,13 @@ public class PositionConsumer {
     } else {
       duplicates.incrementAndGet();
     }
+
+    // Geofencing runs after the measurement is durable, and only for a fix that was genuinely new.
+    // Re-evaluating a duplicate would be harmless -- the geofencer refuses a fix that is not newer
+    // than the last one it applied to that stop -- but it would be work done to reach the same
+    // answer. If this throws, the whole record is retried, which is safe because both the stored
+    // measurement and any republished arrival are recognised as repeats rather than counted twice.
+    geofence.apply(event);
   }
 
   /**

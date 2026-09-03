@@ -1,6 +1,7 @@
 package com.fleettracking.tracking;
 
 import com.fleettracking.tracking.consume.PositionConsumer;
+import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.store.PositionStore;
 import java.time.Duration;
 import java.util.concurrent.Executors;
@@ -34,6 +35,7 @@ public class TrackingHeartbeat implements InitializingBean, DisposableBean {
 
   private final PositionConsumer consumer;
   private final PositionStore store;
+  private final GeofenceService geofence;
   private final Duration interval;
   private final ScheduledExecutorService scheduler =
       Executors.newSingleThreadScheduledExecutor(
@@ -43,9 +45,14 @@ public class TrackingHeartbeat implements InitializingBean, DisposableBean {
             return thread;
           });
 
-  public TrackingHeartbeat(PositionConsumer consumer, PositionStore store, Duration interval) {
+  public TrackingHeartbeat(
+      PositionConsumer consumer,
+      PositionStore store,
+      GeofenceService geofence,
+      Duration interval) {
     this.consumer = consumer;
     this.store = store;
+    this.geofence = geofence;
     this.interval = interval;
   }
 
@@ -58,8 +65,12 @@ public class TrackingHeartbeat implements InitializingBean, DisposableBean {
   private void report() {
     try {
       log.info(
-          "this run: {} | in mongo: {} measurements across {} shipments",
+          "this run: {} | geofence: {} | in mongo: {} measurements across {} shipments",
           consumer.summary(),
+          // Reported next to the stored counts on purpose. A rising unplanned count beside a rising
+          // measurement count is the signature of an unseeded itinerary collection: positions are
+          // landing perfectly and nothing will ever arrive anywhere.
+          geofence.summary(),
           store.historyCount(),
           store.trackedShipments());
     } catch (RuntimeException e) {

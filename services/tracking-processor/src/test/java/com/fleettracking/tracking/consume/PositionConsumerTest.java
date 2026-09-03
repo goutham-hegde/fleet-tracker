@@ -6,6 +6,7 @@ import com.fleettracking.events.EventJson;
 import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.Topics;
 import com.fleettracking.tracking.Positions;
+import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.store.PositionStore;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -33,6 +34,7 @@ class PositionConsumerTest {
   private RecordingDeadLetters deadLetters;
   private PartitionGuard guard;
   private RecentEventIds recentEventIds;
+  private RecordingGeofence geofence;
   private PositionConsumer consumer;
 
   private static final TopicPartition PARTITION = new TopicPartition(Topics.POSITION, 4);
@@ -43,7 +45,8 @@ class PositionConsumerTest {
     deadLetters = new RecordingDeadLetters();
     recentEventIds = new RecentEventIds(64);
     guard = new PartitionGuard(recentEventIds);
-    consumer = new PositionConsumer(store, guard, recentEventIds, deadLetters);
+    geofence = new RecordingGeofence();
+    consumer = new PositionConsumer(store, guard, recentEventIds, geofence, deadLetters);
   }
 
   @Test
@@ -219,6 +222,27 @@ class PositionConsumerTest {
     assertThat(store.recorded).hasSize(2);
   }
 
+  /**
+   * Geofencing is offered only what was stored.
+   *
+   * <p>A record that was set aside, or one recognised as a duplicate, must not reach it: the first
+   * is not a position at all and the second would be re-evaluated to reach an answer already
+   * reached. This is the seam between the two halves of the service, so it is asserted rather than
+   * assumed.
+   */
+  @Test
+  void geofencesOnlyWhatItActuallyStored() {
+    PositionEvent event = Positions.at("SHP-GEO", Duration.ZERO);
+
+    consumer.onPositionEvent(recordFor(event, 0));
+    consumer.onPositionEvent(recordFor(event, 1));
+    consumer.onPositionEvent(
+        new ConsumerRecord<>(Topics.POSITION, 4, 2L, "SHP-GEO", "not json"));
+
+    assertThat(geofence.applied).hasSize(1);
+    assertThat(geofence.applied.getFirst().eventId()).isEqualTo(event.eventId());
+  }
+
   private static ConsumerRecord<String, String> recordWithout(String field) {
     ObjectNode node =
         (ObjectNode)
@@ -266,6 +290,21 @@ class PositionConsumerTest {
       }
       recorded.add(event);
       return true;
+    }
+  }
+
+  /** Records what geofencing was asked to evaluate, and does nothing else. */
+  private static final class RecordingGeofence extends GeofenceService {
+
+    private final List<PositionEvent> applied = new ArrayList<>();
+
+    private RecordingGeofence() {
+      super(null, null, null, null);
+    }
+
+    @Override
+    public void apply(PositionEvent event) {
+      applied.add(event);
     }
   }
 

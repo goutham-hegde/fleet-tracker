@@ -1,0 +1,188 @@
+{
+  "lanes" : [ {
+    "code" : "CHI",
+    "routeId" : "chi-dal-i55",
+    "name" : "Chicago to Dallas via St. Louis and Memphis",
+    "stops" : [ {
+      "stopId" : "chi-dc",
+      "seq" : 0,
+      "name" : "Chicago DC",
+      "city" : "Chicago",
+      "state" : "IL",
+      "latitude" : 41.8781,
+      "longitude" : -87.6298,
+      "radiusMeters" : 400.0,
+      "kind" : "PICKUP",
+      "dwellSeconds" : 4500
+    }, {
+      "stopId" : "stl-xd",
+      "seq" : 1,
+      "name" : "St. Louis crossdock",
+      "city" : "St. Louis",
+      "state" : "MO",
+      "latitude" : 38.627,
+      "longitude" : -90.1994,
+      "radiusMeters" : 400.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 3000
+    }, {
+      "stopId" : "mem-hub",
+      "seq" : 2,
+      "name" : "Memphis hub",
+      "city" : "Memphis",
+      "state" : "TN",
+      "latitude" : 35.1495,
+      "longitude" : -90.049,
+      "radiusMeters" : 400.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 3900
+    }, {
+      "stopId" : "dal-dc",
+      "seq" : 3,
+      "name" : "Dallas DC",
+      "city" : "Dallas",
+      "state" : "TX",
+      "latitude" : 32.7767,
+      "longitude" : -96.797,
+      "radiusMeters" : 400.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 5400
+    } ]
+  }, {
+    "code" : "LAX",
+    "routeId" : "lax-den-cold",
+    "name" : "Los Angeles to Denver via Phoenix, refrigerated",
+    "stops" : [ {
+      "stopId" : "lax-pharma",
+      "seq" : 0,
+      "name" : "LA pharma depot",
+      "city" : "Los Angeles",
+      "state" : "CA",
+      "latitude" : 34.0522,
+      "longitude" : -118.2437,
+      "radiusMeters" : 400.0,
+      "kind" : "PICKUP",
+      "dwellSeconds" : 6000
+    }, {
+      "stopId" : "phx-clinic",
+      "seq" : 1,
+      "name" : "Phoenix clinic dock",
+      "city" : "Phoenix",
+      "state" : "AZ",
+      "latitude" : 33.4484,
+      "longitude" : -112.074,
+      "radiusMeters" : 120.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 2100
+    }, {
+      "stopId" : "den-hosp",
+      "seq" : 2,
+      "name" : "Denver hospital dock",
+      "city" : "Denver",
+      "state" : "CO",
+      "latitude" : 39.7392,
+      "longitude" : -104.9903,
+      "radiusMeters" : 120.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 2400
+    } ]
+  }, {
+    "code" : "ATL",
+    "routeId" : "atl-cmh-ltl",
+    "name" : "Atlanta to Columbus, multi-stop LTL",
+    "stops" : [ {
+      "stopId" : "atl-term",
+      "seq" : 0,
+      "name" : "Atlanta terminal",
+      "city" : "Atlanta",
+      "state" : "GA",
+      "latitude" : 33.749,
+      "longitude" : -84.388,
+      "radiusMeters" : 400.0,
+      "kind" : "PICKUP",
+      "dwellSeconds" : 3600
+    }, {
+      "stopId" : "cha-cust",
+      "seq" : 1,
+      "name" : "Chattanooga customer",
+      "city" : "Chattanooga",
+      "state" : "TN",
+      "latitude" : 35.0456,
+      "longitude" : -85.3097,
+      "radiusMeters" : 120.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 1500
+    }, {
+      "stopId" : "nsh-cust",
+      "seq" : 2,
+      "name" : "Nashville customer",
+      "city" : "Nashville",
+      "state" : "TN",
+      "latitude" : 36.1627,
+      "longitude" : -86.7816,
+      "radiusMeters" : 120.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 1800
+    }, {
+      "stopId" : "lou-cust",
+      "seq" : 3,
+      "name" : "Louisville customer",
+      "city" : "Louisville",
+      "state" : "KY",
+      "latitude" : 38.2527,
+      "longitude" : -85.7585,
+      "radiusMeters" : 120.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 1500
+    }, {
+      "stopId" : "cmh-term",
+      "seq" : 4,
+      "name" : "Columbus terminal",
+      "city" : "Columbus",
+      "state" : "OH",
+      "latitude" : 39.9612,
+      "longitude" : -82.9988,
+      "radiusMeters" : 400.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 3300
+    } ]
+  }, {
+    "code" : "HOU",
+    "routeId" : "hou-lrd-dray",
+    "name" : "Houston to Laredo border drayage",
+    "stops" : [ {
+      "stopId" : "hou-port",
+      "seq" : 0,
+      "name" : "Port of Houston",
+      "city" : "Houston",
+      "state" : "TX",
+      "latitude" : 29.7604,
+      "longitude" : -95.3698,
+      "radiusMeters" : 400.0,
+      "kind" : "PICKUP",
+      "dwellSeconds" : 2700
+    }, {
+      "stopId" : "sat-fuel",
+      "seq" : 1,
+      "name" : "San Antonio fuel stop",
+      "city" : "San Antonio",
+      "state" : "TX",
+      "latitude" : 29.4241,
+      "longitude" : -98.4936,
+      "radiusMeters" : 400.0,
+      "kind" : "WAYPOINT",
+      "dwellSeconds" : 1200
+    }, {
+      "stopId" : "lrd-cross",
+      "seq" : 2,
+      "name" : "Laredo border crossing",
+      "city" : "Laredo",
+      "state" : "TX",
+      "latitude" : 27.5306,
+      "longitude" : -99.4803,
+      "radiusMeters" : 400.0,
+      "kind" : "DELIVERY",
+      "dwellSeconds" : 7200
+    } ]
+  } ]
+}

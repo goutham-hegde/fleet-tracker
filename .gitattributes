@@ -34,3 +34,7 @@ Makefile    text eol=lf
 *.pdf       binary
 *.woff      binary
 *.woff2     binary
+
+# Generated JSON fixtures are committed; keep them LF so the bytes do not depend on the
+# machine that regenerated them.
+docs/samples/lanes.json text eol=lf

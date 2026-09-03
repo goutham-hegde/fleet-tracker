@@ -87,6 +87,13 @@ fleet:
     send-timeout: 15s
     heartbeat-interval: 30s
 
+    # How long a truck must stay on one side of a geofence before the crossing is believed,
+    # in event time. Three minutes sits in a wide gap: the shortest scheduled stop on these
+    # lanes is thirty-five minutes, and nothing that merely pauses near a facility -- a light,
+    # a gate queue, a scale -- pauses for three. Raising it delays every arrival by the
+    # difference; lowering it starts admitting traffic that was only passing.
+    dwell-threshold: 3m
+
     # Event ids remembered per partition, so a message the mobile app sent twice is stored once.
     # It only has to span one backlog burst -- seconds, not hours -- so this is far more history
     # than the case needs. Twelve partitions at this size is a few megabytes and no I/O at all.
