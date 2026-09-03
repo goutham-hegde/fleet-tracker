@@ -3,21 +3,21 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-02 · **Current position:** M2 Events Land complete, session S8 of 24
+**Last updated:** 2026-09-03 · **Current position:** M3 in progress, session S9 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
 M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
-M3 ░░░░░░░░░░  0/3              ← next
+M3 ███░░░░░░░  1/3              ← in progress
 M4 ░░░░░░░░░░  0/2
 M5 ░░░░░░░░░░  0/3
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-                8/24 sessions
+                9/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -91,13 +91,13 @@ true at the time.
 **Capability:** the system knows where every shipment is, whether it is at a stop, and its ETA.
 This is the core product — everything before it is plumbing.
 
-- [ ] **S9** — Position persistence + time-series collection
+- [x] **S9** — Position persistence + time-series collection
 - [ ] **S10** — Geofencing with dwell thresholds
 - [ ] **S11** — ETA calculation
 
 **Exit criteria**
 
-- [ ] Time-series collection grows and current position tracks live under simulator load
+- [x] Time-series collection grows and current position tracks live under simulator load
 - [ ] A scripted geofence crossing produces **exactly one** arrival and **one** departure
 - [ ] ETA converges on approach and does not thrash on GPS noise
 - [ ] Kill and restart the processor mid-run: no duplicate arrivals, no lost positions
@@ -838,18 +838,100 @@ M2's four exit criteria pass against real reference data, and M3 is unblocked.
 
 ---
 
+## S9 — The first consumer, and a position history that keeps its shape
+
+**2026-09-03 · M3**
+
+`tracking-processor` is the first service in this repository that *reads* a topic. Everything before
+it moved messages along; this one turns a stream into state you can query — where a shipment is now,
+and where it has been. Position history goes into a MongoDB time-series collection, and a second,
+much smaller collection holds one current position per shipment.
+
+M3's first exit criterion passes: under simulator load the history grows and the current position
+tracks live, verified against the real cluster rather than only in tests.
+
+**Built**
+
+- **`PositionPoint` and the time-series collection** — one measurement per position event, with
+  `occurredAt` as the time field and `shipmentId` as the meta field. The collection is created
+  explicitly at startup, because inserting into a missing one silently produces an *ordinary*
+  collection: no buckets, no compression, no automatic index, and no error to say so.
+- **`CurrentPosition`** — one document per shipment, updated by a conditional upsert that only ever
+  moves forward in event time. That condition is not defensive programming; it is the mobile feed's
+  normal behaviour, which dumps a buffered backlog out of order after a signal gap.
+- **`PartitionGuard`** — makes Kafka's redelivery harmless without paying for it on every message.
+  Redelivery is always a contiguous run at the start of a partition assignment, so the guard checks
+  against stored history until the first genuinely new record and then stops for that assignment.
+  Steady-state cost: nothing.
+- **`RecentEventIds`** — a bounded, per-partition set of recently-seen event ids, which is what stops
+  a message the *source* sent twice being stored twice. Added mid-session; see the surprise below.
+- **`TrackingDeadLetters` and `tracking.dlq.v1`** — a dead-letter topic separate from the gateway's,
+  because an entry here means something inside the platform produced an event that should not exist,
+  while `ingest.dlq.v1` holds routine bad data from carriers. Burying one in the other loses it.
+- **`Topics` moved into `libs/events`** — a second service needed to name the same topics, and two
+  copies of a wire contract diverge silently. A service's *own* dead-letter topic stays with that
+  service, since nothing else touches it.
+
+**Decisions**
+
+| Decision | Rejected alternative | Why |
+|---|---|---|
+| Records are consumed as **strings and parsed in the listener** | Configure the container to deserialize JSON into the envelope | Same reasoning as the gateway binding request bodies as strings. A record that fails to deserialize fails *inside the framework*, before any of this code runs — so the dead-letter path that exists for exactly that record would never see it. It also keeps every service on the one shared Jackson mapper rather than on whatever a deserializer builds for itself |
+| The error handler **retries for ever** | Spring's default: ten fast attempts, then log and move on | The failure that will actually happen is MongoDB being briefly unavailable. Ten rapid attempts take milliseconds, after which every position event for the length of the outage is discarded with a log line nobody is reading. That is silent data loss. Unbounded retry is safe here only because a record that can never succeed is set aside by the consumer itself and never reaches the handler |
+| Redelivery is checked **only until the first new record per assignment** | Check every record against the database, for ever | Time-series collections cannot take a unique index, so the database will not reject a repeat. But redelivery can only appear as a contiguous run at the start of an assignment, so permanent checking would double the read load on the busiest path in the platform to defend against something confined to the first moments after a rebalance |
+| Source duplicates are caught by a **bounded in-memory set per partition** | An indexed database lookup on every event; or accepting duplicates and filtering when reading | The duplicate is the mobile app resending a backlogged message seconds later, so the window only has to span a burst. A permanent database check is the same trade the guard already declined. Filtering at read time keeps the write path cheap but obliges every future reader to remember — and geofencing, ETA and the dashboard are all future readers |
+| History is written **before** the current position | The other order | If the process dies between the two writes, this order leaves the measurement durable and the current position one fix behind, which the next event repairs. The other order leaves a current position pointing at a measurement that is not in the history: a shipment whose "now" cannot be found in its own past |
+| A **separate dead-letter topic** for this consumer | Reuse `ingest.dlq.v1` | Different audiences. The gateway's rejections are carriers sending malformed data, which is routine and high-volume; an entry here means a producer went around the gateway or an envelope changed without migration. Mixing them buries a handful of real defects in a large pile of expected noise |
+
+**Surprises**
+
+- **The mobile feed's duplicates were reaching the database, and nothing was catching them.** The
+  simulator's mobile emitter resends a message whose acknowledgement was lost — by design, not as an
+  injected fault — and its own notes say the derived event id exists so that this can be deduped
+  downstream. The gateway deliberately does not dedupe; it only makes the repeat *recognisable*. The
+  processor's redelivery guard is off in steady state, also deliberately. So nobody did it. A live
+  run stored 2,102 measurements under 2,100 distinct ids, and both duplicates were mobile. It was
+  found by aggregating the real collection after a run, not by a test — no test would have shown it,
+  because every test published exactly the events it expected. **Two mechanisms that each correctly
+  decline a job leave the job undone, and the gap is invisible from inside either one.**
+- **An integration test failed on a race that describes the design.** The end-to-end test waited for
+  the history count to reach N and then asserted the current position existed. But the store performs
+  two writes per event, deliberately in that order, so there is a window of tens of milliseconds in
+  which the count is final and the current position is not yet written. The poll loop landed in it,
+  twice in a row. The service was right and the test was wrong, and the fix generalises: **wait for
+  the condition being asserted, not for a proxy that usually arrives at the same time.**
+- **A build failed with a file-rename error rather than a test failure.** The Spring Boot repackage
+  goal could not rename the jar, because a service started earlier in the session was still running
+  from it. The message names neither the running process nor the reason.
+
+**Left open**
+
+- Nothing is containerized yet. The gateway and the processor both run from jars on the host against
+  a cluster that holds only Kafka and MongoDB; M6 is where that changes.
+- The restart criterion is only half-proved. A kill and restart mid-run lost no positions and stored
+  no duplicates, but "no duplicate **arrivals**" cannot be checked until S10 produces arrivals.
+- A duplicate whose two copies straddle the whole in-memory window would still be stored twice. The
+  feed does not behave that way, and the limit is asserted in a test rather than left to be
+  rediscovered later as a defect — but it is a limit.
+- `docs/samples/faults/edi-214/` still contains no partially-damaged interchange, so that path is
+  covered by a constructed fixture.
+
+---
+
 ## Next up
 
-**S9 — Position persistence, and the first consumer.** M2 is closed: four dissimilar feeds land on
-one attributed stream, and every event on it carries a shipment, a vehicle and a validated payload.
-M3 makes the platform *know* something rather than merely carry it.
+**S10 — Geofencing with dwell thresholds.** The processor records where every shipment is and has
+been. S10 makes it notice something: that a truck has *arrived* somewhere, and later that it has
+*left*.
 
-S9 builds `tracking-processor`, the first Kafka consumer in the repository, and writes position
-history into a MongoDB **time-series collection** — the storage primitive, not hand-rolled bucketing.
-Two things are new rather than more of the same: a consumer group is what lets the processor scale
-independently of the gateway, and a restart must neither lose positions nor replay them twice, which
-is an offset-commit question rather than a database one.
+The difficulty is not the geometry. It is that the simulator knows the truth and the platform must
+not be allowed to peek at it. Arrivals and departures exist in the simulator as explicit transitions;
+the geofencer has to rediscover them from noisy positions alone — GPS noise is on by default at 6 m —
+and produce **exactly one** arrival and **one** departure per stop. A truck idling on the edge of a
+fence will otherwise flap between inside and outside, which is what a dwell threshold is for.
 
-Three things S8 leaves behind: the gateway still runs from a jar rather than from a manifest inside
-the cluster; nothing writes assignments except the seed script; and the committed fault fixtures
-still contain no partially-damaged EDI interchange.
+That is also what finally settles S9's restart criterion: once arrivals exist, killing the processor
+mid-run must not produce a second one.
+
+S9 leaves behind: nothing containerized, a bounded duplicate window that a sufficiently separated
+repeat would slip through, and the still-missing partially-damaged EDI fixture.
