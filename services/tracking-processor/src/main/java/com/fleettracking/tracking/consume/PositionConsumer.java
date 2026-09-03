@@ -3,6 +3,7 @@ package com.fleettracking.tracking.consume;
 import com.fleettracking.events.EventJson;
 import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.Topics;
+import com.fleettracking.tracking.eta.EtaService;
 import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.store.PositionStore;
 import java.util.concurrent.atomic.AtomicLong;
@@ -59,6 +60,7 @@ public class PositionConsumer {
   private final PartitionGuard guard;
   private final RecentEventIds recentEventIds;
   private final GeofenceService geofence;
+  private final EtaService eta;
   private final TrackingDeadLetters deadLetters;
 
   private final AtomicLong stored = new AtomicLong();
@@ -70,11 +72,13 @@ public class PositionConsumer {
       PartitionGuard guard,
       RecentEventIds recentEventIds,
       GeofenceService geofence,
+      EtaService eta,
       TrackingDeadLetters deadLetters) {
     this.store = store;
     this.guard = guard;
     this.recentEventIds = recentEventIds;
     this.geofence = geofence;
+    this.eta = eta;
     this.deadLetters = deadLetters;
   }
 
@@ -152,7 +156,12 @@ public class PositionConsumer {
     // than the last one it applied to that stop -- but it would be work done to reach the same
     // answer. If this throws, the whole record is retried, which is safe because both the stored
     // measurement and any republished arrival are recognised as repeats rather than counted twice.
-    geofence.apply(event);
+    //
+    // The estimate runs last, on what geofencing just concluded. It has to be this order: the fix
+    // that ends a stop is also the first fix of the leg to the next one, and an estimate built from
+    // the view before that would spend an event pointing at a stop the truck has already left. A
+    // shipment with no plan yields no progress, and there is nothing to estimate against.
+    geofence.apply(event).ifPresent(progress -> eta.apply(event, progress));
   }
 
   /**

@@ -6,7 +6,9 @@ import com.fleettracking.events.EventJson;
 import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.Topics;
 import com.fleettracking.tracking.Positions;
+import com.fleettracking.tracking.eta.EtaService;
 import com.fleettracking.tracking.geofence.GeofenceService;
+import com.fleettracking.tracking.geofence.ShipmentProgress;
 import com.fleettracking.tracking.store.PositionStore;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -35,6 +37,7 @@ class PositionConsumerTest {
   private PartitionGuard guard;
   private RecentEventIds recentEventIds;
   private RecordingGeofence geofence;
+  private RecordingEta eta;
   private PositionConsumer consumer;
 
   private static final TopicPartition PARTITION = new TopicPartition(Topics.POSITION, 4);
@@ -46,7 +49,8 @@ class PositionConsumerTest {
     recentEventIds = new RecentEventIds(64);
     guard = new PartitionGuard(recentEventIds);
     geofence = new RecordingGeofence();
-    consumer = new PositionConsumer(store, guard, recentEventIds, geofence, deadLetters);
+    eta = new RecordingEta();
+    consumer = new PositionConsumer(store, guard, recentEventIds, geofence, eta, deadLetters);
   }
 
   @Test
@@ -303,7 +307,25 @@ class PositionConsumerTest {
     }
 
     @Override
-    public void apply(PositionEvent event) {
+    public java.util.Optional<ShipmentProgress> apply(PositionEvent event) {
+      applied.add(event);
+      // No plan, so nothing to estimate against. The consumer must cope with that, and this is
+      // what a shipment the reference data has never heard of actually looks like.
+      return java.util.Optional.empty();
+    }
+  }
+
+  /** Records what the estimate was asked to evaluate, and does nothing else. */
+  private static final class RecordingEta extends EtaService {
+
+    private final List<PositionEvent> applied = new ArrayList<>();
+
+    private RecordingEta() {
+      super(null, null, null);
+    }
+
+    @Override
+    public void apply(PositionEvent event, ShipmentProgress progress) {
       applied.add(event);
     }
   }

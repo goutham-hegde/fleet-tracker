@@ -224,7 +224,7 @@ class GeofenceIT {
   void replayingEveryPositionDoesNotAnnounceASecondArrival() {
     driveTheScriptedRoute();
     awaitStopComplete();
-    List<String> firstIds = idsOf(drainForThisShipment(Topics.DERIVED));
+    List<String> firstIds = idsOf(conclusions(drainForThisShipment(Topics.DERIVED)));
 
     driveTheScriptedRoute();
 
@@ -232,7 +232,7 @@ class GeofenceIT {
     // let the records be consumed and then look.
     settle();
 
-    List<ConsumerRecord<String, String>> derived = drainForThisShipment(Topics.DERIVED);
+    List<ConsumerRecord<String, String>> derived = conclusions(drainForThisShipment(Topics.DERIVED));
     assertThat(derived).hasSize(2);
     assertThat(idsOf(derived)).isEqualTo(firstIds);
   }
@@ -375,13 +375,32 @@ class GeofenceIT {
   }
 
   private static <T> List<T> only(List<ConsumerRecord<String, String>> records, Class<T> type) {
-    // Arrivals and departures share a topic and are told apart by their shape, exactly as a real
-    // consumer would have to: an arrival has no dwell and a departure does.
-    boolean wantDeparture = type == ShipmentDeparted.class;
-    return records.stream()
-        .filter(r -> EventJson.mapper().readTree(r.value()).has("dwell") == wantDeparture)
+    return conclusions(records).stream()
+        .filter(r -> isA(r, type))
         .map(r -> EventJson.mapper().readValue(r.value(), type))
         .toList();
+  }
+
+  /**
+   * Everything on the derived topic that this test is about — arrivals and departures.
+   *
+   * <p>S11 put a third kind of event on the same topic. Estimates are published for the fixes on
+   * the approach, so a test that counted everything keyed by this shipment would find them and
+   * report several arrivals where there is one. Consumers of a shared topic have always had to tell
+   * its events apart; this is that, in a test.
+   */
+  private static List<ConsumerRecord<String, String>> conclusions(
+      List<ConsumerRecord<String, String>> records) {
+    return records.stream().filter(r -> !has(r, "estimatedArrival")).toList();
+  }
+
+  /** Told apart by shape, exactly as a real consumer would have to: only a departure has a dwell. */
+  private static boolean isA(ConsumerRecord<String, String> record, Class<?> type) {
+    return has(record, "dwell") == (type == ShipmentDeparted.class);
+  }
+
+  private static boolean has(ConsumerRecord<String, String> record, String field) {
+    return EventJson.mapper().readTree(record.value()).has(field);
   }
 
   /** Everything on a topic for this test's shipment. See the note on {@code NEXT_SHIPMENT}. */

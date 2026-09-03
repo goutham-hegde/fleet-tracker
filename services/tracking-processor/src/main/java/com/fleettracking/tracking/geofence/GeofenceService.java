@@ -4,6 +4,7 @@ import com.fleettracking.events.PositionEvent;
 import com.fleettracking.tracking.itinerary.Itinerary;
 import com.fleettracking.tracking.itinerary.ItineraryStore;
 import com.fleettracking.tracking.itinerary.ScheduledStop;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
@@ -71,18 +72,27 @@ public class GeofenceService {
    * was measured and must not depend on the platform having an opinion about it; if this throws,
    * the position is retried and re-evaluated, which is safe precisely because the derived ids are
    * derived.
+   *
+   * @return how far through its plan the shipment now is, or empty for a load nobody planned. The
+   *     ETA calculation that runs next needs exactly this — which stop is next, and whether the
+   *     truck is sitting inside a fence — and it has just been worked out here. Handing it on
+   *     rather than letting the next stage read it again saves a query per position event on the
+   *     busiest path in the platform. See {@link ShipmentProgress}
    */
-  public void apply(PositionEvent event) {
+  public Optional<ShipmentProgress> apply(PositionEvent event) {
     Optional<Itinerary> plan = itineraries.forShipment(event.shipmentId());
     if (plan.isEmpty()) {
       // A load nobody planned. Not an error: the position is stored, there is simply nothing to
       // compare it against. Logged once per position would be far too loud on an unseeded database,
       // so it is counted and reported by the heartbeat instead.
       unplanned.incrementAndGet();
-      return;
+      return Optional.empty();
     }
 
     Map<String, GeofenceState> stored = states.forShipment(event.shipmentId());
+    // The states as they stand after this fix, which is what the estimate that follows needs. A
+    // copy rather than the map itself, so a stop that changed is recorded here as well as written.
+    Map<String, GeofenceState> after = new HashMap<>(stored);
 
     for (ScheduledStop stop : plan.get().stops()) {
       GeofenceState current =
@@ -90,6 +100,7 @@ public class GeofenceService {
               stop.stopId(), GeofenceState.initial(event.shipmentId(), stop.stopId()));
 
       GeofenceDecision decision = geofencer.evaluate(current, stop, event);
+      after.put(stop.stopId(), decision.state());
       if (!decision.changed()) {
         continue;
       }
@@ -107,6 +118,8 @@ public class GeofenceService {
 
       states.save(decision.state());
     }
+
+    return Optional.of(new ShipmentProgress(plan.get(), after));
   }
 
   /** Arrivals announced by this process since it started. */

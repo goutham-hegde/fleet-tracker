@@ -99,6 +99,36 @@ fleet:
     # than the case needs. Twelve partitions at this size is a few megabytes and no I/O at all.
     recent-event-ids: 2000
 
+    eta:
+      # How far the estimate must move before it is worth publishing again. This is the setting
+      # that decides whether the ETA thrashes: at zero, every fix would produce an event and the
+      # dashboard would flicker; too large and a truck that has lost an hour keeps claiming it is
+      # on time. Two minutes is under the three-minute dwell threshold, so the estimate can never
+      # be wrong by more than the length of the stop it is predicting.
+      publish-threshold: 2m
+
+      # How quickly the learned travel speed forgets. A fix arriving five minutes after the last
+      # one is weighted half against everything before it. Deliberately expressed in time rather
+      # than in a number of fixes: telematics reports every ten seconds and a driver's phone every
+      # couple of minutes, and a per-message weight would make one setting mean a minute of memory
+      # for one feed and a quarter of an hour for the other.
+      speed-half-life: 5m
+
+      # What to assume for a shipment nothing has been learned about yet -- the first fix after a
+      # cold start. A motorway freight average. The confidence on that first estimate reports that
+      # it is an assumption rather than a measurement.
+      nominal-speed-kph: 85.0
+
+      # How much longer the road is than the straight line between two points. A stated assumption
+      # of this platform, and where a real deployment would put a routing engine. The simulator
+      # bills its trucks against this same ratio, so 1.0 here would make every estimate short by
+      # eighteen per cent -- which is exactly the mistake the simulator's design exists to expose.
+      road-circuity: 1.18
+
+      # Shipment models held in memory. Bounded, evicting the least recently used; an evicted
+      # model is in MongoDB and is read back on that shipment's next fix.
+      cache-size: 4096
+
 logging:
   level:
     com.fleettracking: INFO

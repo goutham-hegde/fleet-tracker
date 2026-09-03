@@ -45,6 +45,30 @@ public final class DerivedEventIds {
   }
 
   /**
+   * The id of a revised estimate for a shipment's arrival at a stop.
+   *
+   * <p>Derived from the fix that caused the revision rather than from the estimate it states, which
+   * is the opposite way round from the two above. It has to be. An arrival is a fact about a single
+   * moment, so that moment identifies it; an estimate is an opinion that gets restated, and two
+   * consecutive fixes can perfectly well arrive at the same predicted time while being two
+   * different statements about two different positions. Naming an estimate by its own content would
+   * silently collapse those into one.
+   *
+   * <p>The property that matters is unchanged: a replayed position regenerates the same id, so
+   * publishing before recording can repeat an estimate but cannot invent a second one.
+   */
+  public static String eta(String shipmentId, String stopId, String causedByEventId) {
+    String name =
+        String.join(
+            "|",
+            "ETA",
+            shipmentId == null ? "" : shipmentId,
+            stopId == null ? "" : stopId,
+            causedByEventId == null ? "" : causedByEventId);
+    return UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8)).toString();
+  }
+
+  /**
    * The kind is part of the name so that an arrival and a departure cannot collide. They otherwise
    * could: a stop a vehicle passed straight through would have the same shipment, the same stop and
    * very nearly the same instant for both.

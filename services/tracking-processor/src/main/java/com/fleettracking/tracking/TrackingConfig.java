@@ -3,6 +3,9 @@ package com.fleettracking.tracking;
 import com.fleettracking.tracking.consume.PartitionGuard;
 import com.fleettracking.tracking.consume.PositionConsumer;
 import com.fleettracking.tracking.consume.RecentEventIds;
+import com.fleettracking.tracking.eta.EtaCalculator;
+import com.fleettracking.tracking.eta.EtaService;
+import com.fleettracking.tracking.eta.EtaStateStore;
 import com.fleettracking.tracking.geofence.DerivedEventPublisher;
 import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.geofence.GeofenceStateStore;
@@ -147,14 +150,48 @@ public class TrackingConfig {
     return new GeofenceService(itineraries, states, geofencer, publisher);
   }
 
+  /**
+   * The estimate's working state: in memory while a leg is being driven, in MongoDB once published.
+   *
+   * <p>The one cache in this service, and the reason it is allowed where the itinerary and identity
+   * lookups were not is that this is not reference data somebody else maintains — it is this
+   * consumer's own state, written by the single process holding the shipment's partition. See
+   * {@link EtaStateStore}.
+   */
+  @Bean
+  public EtaStateStore etaStateStore(MongoOperations mongo, Clock clock, TrackingProperties properties) {
+    return new EtaStateStore(mongo, clock, properties.eta().cacheSize());
+  }
+
+  @Bean
+  public EtaCalculator etaCalculator(TrackingProperties properties) {
+    TrackingProperties.Eta eta = properties.eta();
+    log.info(
+        "eta: publishing when the estimate moves more than {}, speed half-life {}, "
+            + "nominal {} km/h, road circuity {}",
+        eta.publishThreshold(),
+        eta.speedHalfLife(),
+        eta.nominalSpeedKph(),
+        eta.roadCircuity());
+    return new EtaCalculator(
+        eta.publishThreshold(), eta.speedHalfLife(), eta.nominalSpeedKph(), eta.roadCircuity());
+  }
+
+  @Bean
+  public EtaService etaService(
+      EtaStateStore states, EtaCalculator calculator, DerivedEventPublisher publisher) {
+    return new EtaService(states, calculator, publisher);
+  }
+
   @Bean
   public PositionConsumer positionConsumer(
       PositionStore store,
       PartitionGuard guard,
       RecentEventIds recentEventIds,
       GeofenceService geofence,
+      EtaService eta,
       TrackingDeadLetters deadLetters) {
-    return new PositionConsumer(store, guard, recentEventIds, geofence, deadLetters);
+    return new PositionConsumer(store, guard, recentEventIds, geofence, eta, deadLetters);
   }
 
   /**
@@ -200,7 +237,8 @@ public class TrackingConfig {
       PositionConsumer consumer,
       PositionStore store,
       GeofenceService geofence,
+      EtaService eta,
       TrackingProperties properties) {
-    return new TrackingHeartbeat(consumer, store, geofence, properties.heartbeatInterval());
+    return new TrackingHeartbeat(consumer, store, geofence, eta, properties.heartbeatInterval());
   }
 }

@@ -238,6 +238,70 @@ java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar   --fl
 ./scripts/kafka-cli.sh kafka-console-consumer.sh --bootstrap-server localhost:19092   --topic position.events.v1 --from-beginning
 ```
 
+## Tracking processor
+
+The first service that *reads* a topic. It consumes `position.events.v1` as a consumer group and
+turns a stream of measurements into state you can ask questions of: where a shipment is, where it
+has been, which of its stops it has cleared, and when it will reach the next one.
+
+```bash
+./scripts/seed-identity.sh            # both, once per cluster
+./scripts/seed-itinerary.sh
+./mvnw -pl services/tracking-processor -am package
+java -jar services/tracking-processor/target/tracking-processor-0.1.0-SNAPSHOT.jar
+```
+
+No HTTP port — it is driven by a topic, not by callers. A line every thirty seconds says what it has
+done, because a consumer that is working perfectly is otherwise completely silent, which looks
+exactly like one that has stalled.
+
+It writes four collections and publishes three kinds of event:
+
+| Collection | Holds |
+|---|---|
+| `position.history` | Every measurement, in a MongoDB **time-series collection**. Created explicitly at startup: inserting into a missing one silently produces an ordinary collection, with no buckets, no compression and no error. |
+| `shipment.position` | One document per shipment, updated only by an event that is strictly newer *in event time*. Without that condition the mobile feed's out-of-order backlog would make the map jump backwards. |
+| `geofence.state` | One document per shipment and stop: whether the vehicle is inside, when it crossed, and whether each event has been announced. In the database rather than in memory, because "exactly one arrival" has to survive a restart. |
+| `shipment.eta` | One document per shipment: the current estimate and the learned travel speed behind it. |
+
+**Arrivals are rediscovered, not reported.** No source sends "arrived". The processor watches
+positions cross a circle drawn around each scheduled stop, with three independent defences against
+GPS noise: entering and leaving use *different* thresholds, so no amount of wobble can flip the
+state; a crossing is not believed until the vehicle has stayed on that side for three minutes of
+event time; and a fix whose own stated accuracy is a large fraction of the fence is not consulted at
+all. The radius belongs to the stop — a 400 m distribution yard and a 120 m kerbside dock are not
+the same size, and one value would either miss a truck parked at the far fence or catch traffic
+passing the dock on the street.
+
+**The ETA is deliberately quiet.** It is published only when the estimate has moved more than two
+minutes from the last one announced, so a truck holding its pace says nothing for hours and every
+message that appears is news. Two things make that possible without the estimate going stale:
+distance is measured afresh on every fix and never smoothed, and speed is a time-decayed average of
+how fast the truck goes *while it is moving* — averaging in the zeros would let a five-minute red
+light add an hour to a three-hour estimate and then take twenty minutes to unwind. Distance is the
+straight line inflated by 18%, because roads bend; that figure is a stated assumption, and is where
+a routing service would go.
+
+Everything the processor concludes is published to `shipment.derived.v1`, keyed by shipment like
+every other topic here. Event ids are **derived** — an arrival from the shipment, stop and crossing
+instant; an estimate from the position that caused it — so a redelivered message regenerates the id
+it had the first time. That is what makes it safe to publish before recording that you published:
+the failure that survives a power cut is a duplicate that every consumer already recognises, rather
+than an arrival that silently never happened.
+
+To watch the whole platform at once, run all three:
+
+```bash
+java -jar services/ingest-gateway/target/ingest-gateway-0.1.0-SNAPSHOT.jar &
+java -jar services/tracking-processor/target/tracking-processor-0.1.0-SNAPSHOT.jar &
+
+# Full routes end to end in about five minutes. Four trucks keeps the HTTP sink under its
+# ceiling, and repeat-routes=false lets the run finish.
+java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar   --fleet.simulator.emit.http.enabled=true --fleet.simulator.time-scale=300   --fleet.simulator.tick-interval=200ms --fleet.simulator.trucks=4 --fleet.simulator.repeat-routes=false
+
+./scripts/kafka-cli.sh kafka-console-consumer.sh --bootstrap-server localhost:19092   --topic shipment.derived.v1 --from-beginning
+```
+
 ## Prerequisites
 
 | Tool | Purpose |

@@ -27,6 +27,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     mobile app resending a backlogged message seconds later, so the window only has to span a
  *     burst; the cost of a larger one is memory, and the cost of too small a one is an extra
  *     measurement in an append-only history
+ * @param eta the settings the arrival estimate invents, grouped rather than flattened because they
+ *     only make sense against each other: how long to smooth for and how far a change must move
+ *     before it is worth saying are two ends of the same trade-off
  */
 @ConfigurationProperties(prefix = "fleet.tracking")
 public record TrackingProperties(
@@ -34,7 +37,8 @@ public record TrackingProperties(
     Duration sendTimeout,
     Duration heartbeatInterval,
     Duration dwellThreshold,
-    Integer recentEventIds) {
+    Integer recentEventIds,
+    Eta eta) {
 
   public TrackingProperties {
     retryBackoff = retryBackoff == null ? Duration.ofSeconds(5) : retryBackoff;
@@ -42,5 +46,46 @@ public record TrackingProperties(
     heartbeatInterval = heartbeatInterval == null ? Duration.ofSeconds(30) : heartbeatInterval;
     dwellThreshold = dwellThreshold == null ? Duration.ofMinutes(3) : dwellThreshold;
     recentEventIds = recentEventIds == null ? 2_000 : recentEventIds;
+    eta = eta == null ? new Eta(null, null, null, null, null) : eta;
+  }
+
+  /**
+   * How the arrival estimate behaves.
+   *
+   * @param publishThreshold how far the estimate must move from the last one published before a new
+   *     event is emitted. This is the anti-thrash setting and it is a genuine trade-off: too small
+   *     and the topic fills with revisions nobody can act on, too large and a truck that has lost an
+   *     hour keeps claiming it is on time. Two minutes against a dwell threshold of three keeps the
+   *     stream quiet without letting an estimate go wrong by more than the length of the stop it is
+   *     predicting
+   * @param speedHalfLife how quickly the learned travel speed forgets. A sample arriving one
+   *     half-life after the previous one is worth half the average. Measured in event time and in
+   *     time rather than in messages, so it means the same thing for a telematics unit reporting
+   *     every ten seconds and a phone reporting every two minutes
+   * @param nominalSpeedKph what to assume before anything has been learned — the first fix of a
+   *     shipment this process has never seen. A motorway freight average; the confidence on that
+   *     first estimate says plainly that it is an assumption
+   * @param roadCircuity how much longer the road is than the straight line. A stated assumption of
+   *     this platform, and the place a real deployment would put a routing engine. The simulator
+   *     bills its trucks against exactly this ratio, so an estimate that used 1.0 here would be
+   *     short by eighteen per cent on every leg
+   * @param cacheSize how many shipments' models to keep in memory. Bounded so that a process that
+   *     has seen a hundred thousand loads holds a working set; an evicted model is in MongoDB and is
+   *     read back on the shipment's next fix
+   */
+  public record Eta(
+      Duration publishThreshold,
+      Duration speedHalfLife,
+      Double nominalSpeedKph,
+      Double roadCircuity,
+      Integer cacheSize) {
+
+    public Eta {
+      publishThreshold = publishThreshold == null ? Duration.ofMinutes(2) : publishThreshold;
+      speedHalfLife = speedHalfLife == null ? Duration.ofMinutes(5) : speedHalfLife;
+      nominalSpeedKph = nominalSpeedKph == null ? 85.0 : nominalSpeedKph;
+      roadCircuity = roadCircuity == null ? 1.18 : roadCircuity;
+      cacheSize = cacheSize == null ? 4_096 : cacheSize;
+    }
   }
 }
