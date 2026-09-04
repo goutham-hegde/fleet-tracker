@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
  * feed, and that is its entire reason for existing. Three properties matter downstream:
  *
  * <ul>
- *   <li><b>It disappears.</b> A truck between Phoenix and Denver spends real stretches with no
+ *   <li><b>It disappears.</b> A truck between Kurnool and Bengaluru spends real stretches with no
  *       signal. The app keeps recording and sends nothing.
  *   <li><b>It comes back all at once.</b> On reconnect the whole backlog goes out in a burst,
  *       <em>out of order</em>, because the queue is drained concurrently rather than in sequence.

@@ -190,15 +190,15 @@ class IngestGatewayIT {
 
     // The key is the whole ordering guarantee. Without it the record goes to a partition chosen at
     // random and one shipment's history is spread across twelve of them in no particular order.
-    assertThat(record.key()).isEqualTo("SHP-LAX-0002");
+    assertThat(record.key()).isEqualTo("SHP-HYD-0002");
 
     // Read as Event, not as PositionEvent: that is what a consumer subscribed to the topic does,
     // and it exercises the "type" discriminator the sealed hierarchy writes.
     PositionEvent event = (PositionEvent) EventJson.mapper().readValue(record.value(), Event.class);
-    assertThat(event.shipmentId()).isEqualTo("SHP-LAX-0002");
+    assertThat(event.shipmentId()).isEqualTo("SHP-HYD-0002");
     assertThat(event.vehicleId()).isEqualTo("VEH-0002");
     assertThat(event.deviceId()).isEqualTo("TLM-0002");
-    assertThat(event.position().latitude()).isCloseTo(34.052209, org.assertj.core.data.Offset.offset(1e-6));
+    assertThat(event.position().latitude()).isCloseTo(17.610009, org.assertj.core.data.Offset.offset(1e-6));
     // Imperial in, metric out: the captured odometer reads 51665.8 miles.
     assertThat(event.odometerKm()).isCloseTo(83148.05, org.assertj.core.data.Offset.offset(0.05));
     // HDOP 1.09 became a radius in metres rather than being copied across.
@@ -210,7 +210,7 @@ class IngestGatewayIT {
   @Test
   void aCorruptPayloadReachesTheDeadLetterTopicAndNowhereElse() {
     // Genuinely broken bytes, marked so this test can find its own message among the others.
-    String corrupt = "{\"marker\":\"dlq-probe\",\"deviceId\":\"TLM-0003\",\"gps\":{\"lat\":34.0";
+    String corrupt = "{\"marker\":\"dlq-probe\",\"deviceId\":\"TLM-0003\",\"gps\":{\"lat\":12.9";
 
     Posted response = post("/ingest/telematics", "application/json", corrupt);
 
@@ -238,7 +238,7 @@ class IngestGatewayIT {
     String unknown =
         """
         {"marker":"identity-probe","deviceId":"TLM-4242","vehicle":{"id":"VEH-4242"},
-         "gps":{"lat":35.1495,"lon":-90.049,"speedMph":55.0,"headingDeg":47.4,"hdop":1.0,
+         "gps":{"lat":12.92014,"lon":77.65032,"speedMph":55.0,"headingDeg":134.0,"hdop":1.0,
                 "fixTime":"2026-08-31T14:05:00Z"},
          "odometer":{"value":100.0,"unit":"mi"},"sentAt":"2026-08-31T14:05:02Z"}
         """;
@@ -261,7 +261,7 @@ class IngestGatewayIT {
     // representation and no idea of each other's identifiers describe the same shipment, and what
     // comes out the far side is one stream of canonical events under one key.
     //
-    // The four captured payloads deliberately concern SHP-LAX-0002, which the fleet knows as
+    // The four captured payloads deliberately concern SHP-HYD-0002, which the fleet knows as
     // VEH-0002 with a telematics unit TLM-0002 and a reefer probe DEV-0002. Only the phone names
     // the shipment; telematics names the truck, the probe names itself, and the carrier's
     // interchange names several shipments at once.
@@ -269,9 +269,9 @@ class IngestGatewayIT {
     // test here drains the topics from the beginning, and a resent payload produces a byte-identical
     // event by design, so two tests posting one payload would each see the other's record.
     String telematics = lastFixtureLineFor("telematics.jsonl", "TLM-0002");
-    String mobile = firstFixtureLineFor("mobile-app.jsonl", "SHP-LAX-0002");
+    String mobile = firstFixtureLineFor("mobile-app.jsonl", "SHP-HYD-0002");
     String reefer = firstFixtureLineFor("reefer-sensor.jsonl", "DEV-0002");
-    String edi = interchangeFor("SHP-LAX-0002");
+    String edi = interchangeFor("SHP-HYD-0002");
 
     assertThat(post("/ingest/telematics", "application/json", telematics).status()).isEqualTo(202);
     assertThat(post("/ingest/mobile", "application/json", mobile).status()).isEqualTo(202);
@@ -282,17 +282,17 @@ class IngestGatewayIT {
     List<ConsumerRecord<String, String>> statuses = drain(Topics.STATUS);
 
     // Positions from the two feeds that carry coordinates.
-    assertThat(sourcesOf(positions, "SHP-LAX-0002"))
+    assertThat(sourcesOf(positions, "SHP-HYD-0002"))
         .contains(SourceSystem.TELEMATICS, SourceSystem.MOBILE_APP);
     // Statuses from the two that do not: a temperature with no position, and a carrier's status
     // with a place name and no position.
-    assertThat(sourcesOf(statuses, "SHP-LAX-0002"))
+    assertThat(sourcesOf(statuses, "SHP-HYD-0002"))
         .contains(SourceSystem.REEFER_SENSOR, SourceSystem.EDI_214);
 
     // Every one of them keyed by the shipment, which is what puts four dissimilar sources onto one
     // partition and makes their relative order mean something.
-    assertThat(positions).filteredOn(r -> "SHP-LAX-0002".equals(r.key())).isNotEmpty();
-    assertThat(statuses).filteredOn(r -> "SHP-LAX-0002".equals(r.key())).isNotEmpty();
+    assertThat(positions).filteredOn(r -> "SHP-HYD-0002".equals(r.key())).isNotEmpty();
+    assertThat(statuses).filteredOn(r -> "SHP-HYD-0002".equals(r.key())).isNotEmpty();
   }
 
   @Test
@@ -362,7 +362,7 @@ class IngestGatewayIT {
 
     // The probe named a device and nothing else. The key it ended up under came entirely from
     // reference data, which is what S8 replaces with a real lookup.
-    assertThat(statuses.getFirst().key()).isEqualTo("SHP-LAX-0002");
+    assertThat(statuses.getFirst().key()).isEqualTo("SHP-HYD-0002");
     StatusEvent event =
         (StatusEvent) EventJson.mapper().readValue(statuses.getFirst().value(), Event.class);
     assertThat(event.deviceId()).isEqualTo("DEV-0002");

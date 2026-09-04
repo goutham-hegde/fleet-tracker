@@ -48,12 +48,12 @@ Line-delimited JSON, one object per report, roughly every thirty simulated secon
 Nested the way a device vendor nests things rather than the way a logistics platform would.
 
 ```json
-{"deviceId":"TLM-0002","vehicle":{"id":"VEH-0002","unitNumber":"0002","make":"Freightliner"},
- "gps":{"lat":34.052209,"lon":-118.243668,"speedMph":0.0,"headingDeg":95.0,
-        "satellites":10,"hdop":1.09,"fixTime":"2026-08-31T09:42:19.744319200Z"},
+{"deviceId":"TLM-0002","vehicle":{"id":"VEH-0002","unitNumber":"0002","make":"Tata"},
+ "gps":{"lat":17.610009,"lon":78.580027,"speedMph":0.0,"headingDeg":196.3,
+        "satellites":10,"hdop":1.09,"fixTime":"2026-09-03T18:48:29.910992300Z"},
  "odometer":{"value":51665.8,"unit":"mi"},
  "engine":{"rpm":650,"coolantTempF":185,"fuelLevelPct":3.3,"ignition":"ON"},
- "sentAt":"2026-08-31T09:42:19.744319200Z","schemaVersion":"2.3"}
+ "sentAt":"2026-09-03T18:48:29.910992300Z","schemaVersion":"2.3"}
 ```
 
 Traps: every number is imperial; there is **no shipment id**, because the box is bolted to a
@@ -66,8 +66,8 @@ from satellite geometry, not a radius in metres.
 Abbreviated keys, because the payload was designed to be cheap over a mobile connection.
 
 ```json
-{"sid":"SHP-LAX-0006","ts":1788169339744,"lat":34.05221,"lng":-118.24381,"acc":21.0,
- "spd":0.0,"hdg":95,"bat":100,"evt":"ping","seq":1,"app":"3.4.1"}
+{"sid":"SHP-HYD-0006","ts":1788461309910,"lat":17.61001,"lng":78.57991,"acc":21.0,
+ "spd":0.0,"hdg":196,"bat":100,"evt":"ping","seq":1,"app":"3.4.1"}
 ```
 
 The inverse of telematics: it knows the **shipment** and not the vehicle, because a driver signs in
@@ -76,7 +76,7 @@ handles telematics correctly is still wrong here.
 
 It is also the unreliable feed. Trucks lose signal, the app buffers, and the backlog goes out in a
 burst on reconnect — **out of order, and with repeats**. Two shipments in this capture show it;
-`SHP-LAX-0002` arrives in sequence order:
+`SHP-HYD-0002` arrives in sequence order:
 
 ```
 1, 2, 7, 10, 11, 6, 8, 4, 5, 3, 5, 9, 12, 13, 14, 15, 16, 17
@@ -97,22 +97,22 @@ X12 EDI 214 Transportation Carrier Shipment Status, one **interchange** per file
 segments terminated by `~`, elements separated by `*`.
 
 ```
-ISA*00*          *00*          *02*CARRIER01      *ZZ*FLEETTRACK     *260831*1111*U*00401*000000101*0*P*>~
-GS*QM*CARRIER01*FLEETTRACK*20260831*1111*101*X*004010~
+ISA*00*          *00*          *02*CARRIER01      *ZZ*FLEETTRACK     *260903*2118*U*00401*000000102*0*P*>~
+GS*QM*CARRIER01*FLEETTRACK*20260903*2118*102*X*004010~
 ST*214*0001~
-B10*1645387*SHP-HOU-0004*FLTX~
+B10*3238738*SHP-HYD-0002*FLTX~
 LX*1~
-AT7*AF*NS***20260831*1026*UT~
-MS1*HOUSTON*TX*US~
+AT7*AF*NS***20260903*2027*UT~
+MS1*HYDERABAD*TG*IN~
 SE*6*0001~
 ST*214*0002~
-B10*1645383*SHP-HOU-0008*FLTX~
+B10*3238734*SHP-HYD-0006*FLTX~
 LX*1~
-AT7*AF*NS***20260831*1026*UT~
-MS1*HOUSTON*TX*US~
+AT7*AF*NS***20260903*2027*UT~
+MS1*HYDERABAD*TG*IN~
 SE*6*0002~
-GE*2*101~
-IEA*1*000000101~
+GE*2*102~
+IEA*1*000000102~
 ```
 
 Four things a parser has to get right:
@@ -120,10 +120,10 @@ Four things a parser has to get right:
 - **The line breaks are cosmetic.** The terminator is `~`. Real interchanges are often one enormous
   line, so split on `~`, never on `\n`. These samples contain newlines specifically so that a
   parser tested only against them can still be wrong in production.
-- **Empty elements are meaningful.** `AT7*AF*NS***20260831*1026*UT` has two empty appointment
+- **Empty elements are meaningful.** `AT7*AF*NS***20260903*2027*UT` has two empty appointment
   elements holding the position of everything after them. Collapse them and the date is read as an
   appointment code.
-- **No coordinates, ever.** `MS1*HOUSTON*TX*US` is the entire location, and the carrier does not
+- **No coordinates, ever.** `MS1*HYDERABAD*TG*IN` is the entire location, and the carrier does not
   know this platform's stop identifiers either. Matching it to a stop requires geocoding.
 - **One interchange covers many shipments**, so it has no single shipment id and therefore no
   partition key until it is split.
@@ -147,15 +147,15 @@ arrivals that EDI has no opinion about.
 A thermometer with a radio.
 
 ```json
-{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-08-31T09:42:39.744319200Z",
+{"probe":"DEV-0002","model":"ThermoKing-CX7","readingUtc":"2026-09-03T18:48:49.910992300Z",
  "tempC":4.18,"setpointC":4.0,"returnAirC":4.93,"supplyAirC":3.02,
  "door":"OPEN","batteryV":12.64}
 ```
 
 No position, no vehicle, no shipment — a device id is the only identity, and resolving it to a load
 takes two hops through reference data. Only refrigerated lanes carry a probe, so most trucks in the
-capture emit nothing here at all — only `DEV-0002` and `DEV-0006`, the two trucks on the Los
-Angeles to Denver pharma lane, appear.
+capture emit nothing here at all — only `DEV-0002` and `DEV-0006`, the two trucks on the
+Hyderabad to Bengaluru pharma lane, appear.
 
 The setpoint travels with the measurement because neither means anything alone: 4 °C is healthy for
 pharma and ruinous for frozen freight. `alarm` is **absent** rather than null when the unit is

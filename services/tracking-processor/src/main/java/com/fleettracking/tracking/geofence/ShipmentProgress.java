@@ -33,7 +33,7 @@ public record ShipmentProgress(Itinerary itinerary, Map<String, GeofenceState> s
    * The next stop the shipment has not yet been announced as arriving at.
    *
    * <p>By plan order rather than by distance. A truck can be closer to a stop it has already served
-   * than to the one it is driving to — the lane through St. Louis passes within a few miles of
+   * than to the one it is driving to — the lane through Jaipur passes within a few kilometres of
    * places it left hours ago — so "nearest" is the wrong question. Empty once every stop has been
    * arrived at, which is a finished shipment with nothing left to estimate.
    */

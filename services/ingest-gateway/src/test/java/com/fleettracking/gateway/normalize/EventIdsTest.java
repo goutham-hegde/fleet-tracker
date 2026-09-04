@@ -33,8 +33,8 @@ class EventIdsTest {
   @Test
   void separatesTwoEventsASourceFiledForTheSameInstant() {
     // One EDI interchange can report an arrival and a departure with the same HHMM stamp.
-    assertThat(EventIds.of(SourceSystem.EDI_214, "SHP-HOU-0004", AT, "X1"))
-        .isNotEqualTo(EventIds.of(SourceSystem.EDI_214, "SHP-HOU-0004", AT, "CD"));
+    assertThat(EventIds.of(SourceSystem.EDI_214, "SHP-BOM-0004", AT, "X1"))
+        .isNotEqualTo(EventIds.of(SourceSystem.EDI_214, "SHP-BOM-0004", AT, "CD"));
   }
 
   @Test

@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Size;
  * A place named in words rather than in coordinates.
  *
  * <p>This exists for EDI 214, which reports status against a city and state and never against a
- * latitude and longitude. "Arrived at MEMPHIS TN" is a real and useful statement, but it cannot be
+ * latitude and longitude. "Arrived at KURNOOL AP" is a real and useful statement, but it cannot be
  * drawn on a map until something geocodes it. Keeping the words in a distinct type from
  * {@link GeoPoint} means the difference between "we know where this is" and "we know what the
  * carrier called it" is visible in the type system rather than in a comment.

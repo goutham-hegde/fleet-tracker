@@ -59,7 +59,7 @@ class ReeferNormalizerTest {
     StatusEvent event = normalizeOne(reading());
 
     assertThat(event.deviceId()).isEqualTo("DEV-0002");
-    assertThat(event.shipmentId()).isEqualTo("SHP-LAX-0002");
+    assertThat(event.shipmentId()).isEqualTo("SHP-HYD-0002");
     assertThat(event.vehicleId()).isEqualTo("VEH-0002");
   }
 

@@ -26,13 +26,13 @@ class GeofencerTest {
   private static final Instant T0 = Instant.parse("2026-09-01T08:00:00Z");
   private static final Duration DWELL = Duration.ofMinutes(3);
 
-  /** A 400 m yard at the Chicago DC coordinates. */
+  /** A 400 m yard at the Okhla DC coordinates. */
   private static final ScheduledStop YARD =
-      new ScheduledStop("chi-dc", 0, "Chicago DC", "Chicago", "IL", 41.8781, -87.6298, 400, "PICKUP");
+      new ScheduledStop("del-okhla", 0, "Okhla DC", "Delhi", "DL", 28.5355, 77.2730, 400, "PICKUP");
 
   /** A 120 m kerbside dock, at the same coordinates so only the radius differs. */
   private static final ScheduledStop DOCK =
-      new ScheduledStop("phx-clinic", 1, "Clinic dock", "Phoenix", "AZ", 41.8781, -87.6298, 120, "DELIVERY");
+      new ScheduledStop("knl-clinic", 1, "Clinic dock", "Kurnool", "AP", 28.5355, 77.2730, 120, "DELIVERY");
 
   private final Geofencer geofencer = new Geofencer(DWELL);
 
@@ -70,7 +70,7 @@ class GeofencerTest {
     var arrival = evaluate(state, YARD, atStop(4)).arrivalEvent().orElseThrow();
 
     assertThat(arrival.occurredAt()).isEqualTo(T0);
-    assertThat(arrival.stopId()).isEqualTo("chi-dc");
+    assertThat(arrival.stopId()).isEqualTo("del-okhla");
     assertThat(arrival.causedBy()).isEqualTo(atStop(4).eventId());
   }
 
@@ -189,7 +189,7 @@ class GeofencerTest {
     var departure = evaluate(state, YARD, farAway(54)).departureEvent().orElseThrow();
 
     assertThat(departure.occurredAt()).isEqualTo(T0.plus(Duration.ofMinutes(50)));
-    assertThat(departure.stopId()).isEqualTo("chi-dc");
+    assertThat(departure.stopId()).isEqualTo("del-okhla");
   }
 
   /**
@@ -318,7 +318,7 @@ class GeofencerTest {
   }
 
   private static GeofenceState initial() {
-    return GeofenceState.initial("SHP-CHI-0001", "chi-dc");
+    return GeofenceState.initial("SHP-DEL-0001", "del-okhla");
   }
 
   /** A vehicle that entered at T0 and had its arrival confirmed four minutes later. */
@@ -333,25 +333,25 @@ class GeofencerTest {
 
   /** Dead centre of the stop. */
   private static PositionEvent atStop(int minute, Double accuracyMeters) {
-    return at(minute, 41.8781, -87.6298, accuracyMeters);
+    return at(minute, 28.5355, 77.2730, accuracyMeters);
   }
 
   /** A given number of metres due north of the stop, for testing a boundary precisely. */
   private static PositionEvent northOfStop(int minute, double meters) {
     double degreesPerMeter = 1.0 / (Distance.EARTH_RADIUS_METERS * Math.PI / 180.0);
-    return at(minute, 41.8781 + meters * degreesPerMeter, -87.6298, 6.0);
+    return at(minute, 28.5355 + meters * degreesPerMeter, 77.2730, 6.0);
   }
 
   /** Comfortably outside any fence: roughly 9 km away. */
   private static PositionEvent farAway(int minute) {
-    return at(minute, 41.9581, -87.6298, 6.0);
+    return at(minute, 28.6155, 77.2730, 6.0);
   }
 
   private static PositionEvent at(int minute, double lat, double lon, Double accuracyMeters) {
     Instant occurredAt = T0.plus(Duration.ofMinutes(minute));
     return new PositionEvent(
         "evt-" + occurredAt.toEpochMilli(),
-        "SHP-CHI-0001",
+        "SHP-DEL-0001",
         "VEH-0001",
         "TLM-0001",
         occurredAt,

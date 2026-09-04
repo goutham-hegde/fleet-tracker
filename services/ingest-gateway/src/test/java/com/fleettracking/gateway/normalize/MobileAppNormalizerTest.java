@@ -43,8 +43,8 @@ class MobileAppNormalizerTest {
   // 2026-08-31T13:40:00Z; the message is handled three seconds later, which is what an ordinary
   // ping with signal looks like.
   private static String ping() {
-    return "{\"sid\":\"SHP-ATL-0003\",\"ts\":1788183600000,\"lat\":33.74899,\"lng\":-84.38800,"
-        + "\"acc\":18.5,\"spd\":27.5,\"hdg\":330,\"bat\":84,\"evt\":\"ping\",\"seq\":42,"
+    return "{\"sid\":\"SHP-BLR-0003\",\"ts\":1788183600000,\"lat\":13.02869,\"lng\":77.51999,"
+        + "\"acc\":18.5,\"spd\":27.5,\"hdg\":135,\"bat\":84,\"evt\":\"ping\",\"seq\":42,"
         + "\"app\":\"3.4.1\"}";
   }
 
@@ -67,7 +67,7 @@ class MobileAppNormalizerTest {
     // The app named the shipment; the vehicle came from reference data. Telematics knows the
     // vehicle and looks up the shipment, so the two feeds consult the same table in opposite
     // directions and neither could publish without it.
-    assertThat(event.shipmentId()).isEqualTo("SHP-ATL-0003");
+    assertThat(event.shipmentId()).isEqualTo("SHP-BLR-0003");
     assertThat(event.vehicleId()).isEqualTo("VEH-0003");
     // A phone is not a fitted device. Naming one would put a piece of hardware on the map that
     // does not exist.
@@ -140,24 +140,24 @@ class MobileAppNormalizerTest {
     // A driver tapping "arrived" while the app sends its routine ping produces two real events with
     // one timestamp from one shipment. If the event kind were not part of the id they would
     // collapse into one and a consumer's dedup would silently discard the arrival.
-    String tapped = ping().replace("\"evt\":\"ping\"", "\"evt\":\"arrive\",\"stop\":\"atl-dc\"");
+    String tapped = ping().replace("\"evt\":\"ping\"", "\"evt\":\"arrive\",\"stop\":\"blr-peenya\"");
 
     assertThat(normalizeOne(tapped).eventId()).isNotEqualTo(normalizeOne(ping()).eventId());
   }
 
   @Test
   void turnsADriverTapIntoAStatusEventCarryingWhereThePhoneWas() {
-    String tapped = ping().replace("\"evt\":\"ping\"", "\"evt\":\"depart\",\"stop\":\"atl-dc\"");
+    String tapped = ping().replace("\"evt\":\"ping\"", "\"evt\":\"depart\",\"stop\":\"blr-peenya\"");
 
     StatusEvent event = (StatusEvent) normalizeOne(tapped);
 
     assertThat(event.status()).isEqualTo(StatusCode.DEPARTED_STOP);
     // The stop id is this platform's own, because the app is this platform's software. The carrier
     // EDI feed reports the same kind of event and cannot name a stop at all.
-    assertThat(event.stopId()).isEqualTo("atl-dc");
+    assertThat(event.stopId()).isEqualTo("blr-peenya");
     // Coordinates on a status event, which lets a claimed departure be checked against where the
     // phone actually was rather than taken on trust.
-    assertThat(event.position().latitude()).isEqualTo(33.74899);
+    assertThat(event.position().latitude()).isEqualTo(13.02869);
   }
 
   @Test
@@ -169,7 +169,7 @@ class MobileAppNormalizerTest {
 
   @Test
   void wrapsAHeadingOfThreeHundredAndSixtyRoundToZero() {
-    String body = ping().replace("\"hdg\":330", "\"hdg\":360");
+    String body = ping().replace("\"hdg\":135", "\"hdg\":360");
 
     assertThat(((PositionEvent) normalizeOne(body)).headingDegrees()).isEqualTo(0.0);
   }
@@ -196,7 +196,7 @@ class MobileAppNormalizerTest {
 
   @Test
   void rejectsAShipmentNoVehicleIsAssignedTo() {
-    String body = ping().replace("SHP-ATL-0003", "SHP-XXX-9999");
+    String body = ping().replace("SHP-BLR-0003", "SHP-XXX-9999");
 
     NormalizationResult result = normalize(body);
 
@@ -219,7 +219,7 @@ class MobileAppNormalizerTest {
 
   @Test
   void rejectsAMessageWithNoPosition() {
-    String body = "{\"sid\":\"SHP-ATL-0003\",\"ts\":1788183600000,\"evt\":\"ping\",\"seq\":42}";
+    String body = "{\"sid\":\"SHP-BLR-0003\",\"ts\":1788183600000,\"evt\":\"ping\",\"seq\":42}";
 
     assertThat(normalize(body))
         .isEqualTo(new NormalizationResult.Rejected(RejectionReason.MISSING_FIELD, "lat/lng"));

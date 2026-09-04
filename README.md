@@ -158,9 +158,10 @@ java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar \
   --fleet.simulator.repeat-routes=false
 ```
 
-Lanes are Chicago→Dallas (long-haul), Los Angeles→Denver (refrigerated), Atlanta→Columbus
-(multi-stop LTL) and Houston→Laredo (border drayage). They differ in shape on purpose — leg
-lengths, stop counts and dwell patterns are all different, so a bug cannot hide behind uniformity.
+Lanes are Delhi→Mumbai on NH-48 (long-haul), Hyderabad→Bengaluru (refrigerated pharma),
+Bengaluru→Chennai (multi-stop LTL) and Nhava Sheva→Pune (port drayage). They differ in shape
+on purpose — leg lengths, stop counts and dwell patterns are all different, so a bug cannot
+hide behind uniformity.
 
 ### Output
 

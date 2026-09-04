@@ -130,7 +130,7 @@ public class TelematicsEmitter implements TickObserver {
 
   /** Deterministic from the vehicle number, so a truck keeps the same make across a run. */
   private static String make(String vehicleId) {
-    String[] makes = {"Freightliner", "Kenworth", "Peterbilt", "Volvo", "International"};
+    String[] makes = {"Tata", "Ashok Leyland", "BharatBenz", "Eicher", "Mahindra"};
     int n = Math.abs(vehicleId.hashCode());
     return makes[n % makes.length];
   }

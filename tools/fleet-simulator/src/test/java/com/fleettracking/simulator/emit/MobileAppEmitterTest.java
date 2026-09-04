@@ -44,11 +44,11 @@ class MobileAppEmitterTest {
     run(emitter(0), 40, List.of());
 
     JsonNode payload = sink.firstJson();
-    assertThat(payload.get("sid").stringValue()).isEqualTo("SHP-CHI-0007");
+    assertThat(payload.get("sid").stringValue()).isEqualTo("SHP-DEL-0007");
     // Epoch millis, not an ISO string -- a different time representation from every other feed.
     assertThat(payload.get("ts").longValue()).isGreaterThan(1_700_000_000_000L);
-    // 100 km/h is 27.8 m/s. Neither km/h nor mph.
-    assertThat(payload.get("spd").doubleValue()).isCloseTo(27.8, within(0.1));
+    // 60 km/h is 16.7 m/s. Neither km/h nor mph.
+    assertThat(payload.get("spd").doubleValue()).isCloseTo(16.7, within(0.1));
     assertThat(payload.get("acc").doubleValue()).isBetween(4.0, 30.0);
     assertThat(payload.get("app").stringValue()).isEqualTo("3.4.1");
   }
@@ -59,7 +59,7 @@ class MobileAppEmitterTest {
     run(emitter(0), 40, List.of());
 
     assertThat(sink.messages().getFirst().body()).doesNotContain("VEH-");
-    assertThat(sink.messages().getFirst().routingKey()).isEqualTo("SHP-CHI-0007");
+    assertThat(sink.messages().getFirst().routingKey()).isEqualTo("SHP-DEL-0007");
   }
 
   @Test
@@ -70,11 +70,11 @@ class MobileAppEmitterTest {
         40,
         List.of(
             new TruckTransition.Arrived(
-                "VEH-0007", "SHP-CHI-0007", Snapshots.DELIVERY, Snapshots.AT)));
+                "VEH-0007", "SHP-DEL-0007", Snapshots.DELIVERY, Snapshots.AT)));
 
     JsonNode first = sink.firstJson();
     assertThat(first.get("evt").stringValue()).isEqualTo("arrive");
-    assertThat(first.get("stop").stringValue()).isEqualTo("mem-hub");
+    assertThat(first.get("stop").stringValue()).isEqualTo("amd-aslali");
     // An ordinary ping carries no stop at all, so the shape varies between messages.
     assertThat(sink.json(1).has("stop")).isFalse();
     assertThat(sink.json(1).get("evt").stringValue()).isEqualTo("ping");

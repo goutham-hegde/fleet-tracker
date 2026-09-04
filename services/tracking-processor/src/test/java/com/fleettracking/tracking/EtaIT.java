@@ -67,7 +67,9 @@ import org.testcontainers.mongodb.MongoDBContainer;
  * <p>The truck drives a scripted approach with a slow patch in the middle, so that the estimate has
  * to be revised and then recover. Its arithmetic is arranged to arrive at a known instant: the
  * straight-line steps are what a truck covers when its odometer turns at the reported speed and the
- * road is eighteen per cent longer than the line.
+ * road is thirty per cent longer than the line. The reported speed is <em>derived</em> from the step
+ * and the circuity rather than written beside it, so that changing the platform's road assumption
+ * cannot leave this script quietly describing a truck that is not the one it publishes.
  */
 @SpringBootTest
 @Testcontainers
@@ -79,19 +81,31 @@ class EtaIT {
 
   private static final Instant T0 = Instant.parse("2026-09-01T08:00:00Z");
 
-  /** The Chicago DC, exactly as the committed lane catalogue states it. */
-  private static final double STOP_LAT = 41.8781;
+  /** The Okhla DC in Delhi, exactly as the committed lane catalogue states it. */
+  private static final double STOP_LAT = 28.5355;
 
-  private static final double STOP_LON = -87.6298;
+  private static final double STOP_LON = 77.2730;
 
   /** One degree of latitude, in kilometres. */
   private static final double KM_PER_DEGREE = 111.19;
 
-  /** Cruise: 6 km of straight line every five minutes, billed as 85 km/h against the longer road. */
-  private static final double CRUISE_KPH = 85.0;
+  /**
+   * How much longer the road is than the line. Must match {@code fleet.tracking.eta.road-circuity}
+   * and {@code Route.ROAD_CIRCUITY}: one assumption stated in three places, which is exactly why it
+   * is named here rather than multiplied in by hand.
+   */
+  private static final double ROAD_CIRCUITY = 1.30;
+
+  /** Cruise: 4 km of straight line every five minutes. */
+  private static final double CRUISE_STEP_KM = 4.0;
 
   /** The slow patch: half that. */
-  private static final double CRAWL_KPH = 42.5;
+  private static final double CRAWL_STEP_KM = CRUISE_STEP_KM / 2;
+
+  /** What the odometer turns at to cover that step: 48 km/h along the line, 62.4 along the road. */
+  private static final double CRUISE_KPH = CRUISE_STEP_KM * 12 * ROAD_CIRCUITY;
+
+  private static final double CRAWL_KPH = CRUISE_KPH / 2;
 
   /**
    * A distinct shipment per test, for the reason {@code GeofenceIT} gives: the collections are
@@ -154,12 +168,12 @@ class EtaIT {
     mongo.save(
         new Itinerary(
             shipment,
-            "chi-dal-i55",
+            "del-bom-nh48",
             List.of(
                 new ScheduledStop(
-                    "chi-dc", 0, "Chicago DC", "Chicago", "IL", STOP_LAT, STOP_LON, 400, "PICKUP"),
+                    "del-okhla", 0, "Okhla DC", "Delhi", "DL", STOP_LAT, STOP_LON, 400, "PICKUP"),
                 new ScheduledStop(
-                    "stl-xd", 1, "St. Louis", "St. Louis", "MO", 38.6270, -90.1994, 400,
+                    "jai-vki", 1, "Jaipur VKI depot", "Jaipur", "RJ", 26.9124, 75.7873, 400,
                     "DELIVERY"))));
   }
 
@@ -175,7 +189,7 @@ class EtaIT {
     assertThat(etas).isNotEmpty();
     assertThat(etas).allSatisfy(eta -> {
       assertThat(eta.shipmentId()).isEqualTo(shipment);
-      assertThat(eta.stopId()).isEqualTo("chi-dc");
+      assertThat(eta.stopId()).isEqualTo("del-okhla");
       assertThat(eta.remainingKm()).isPositive();
       assertThat(eta.confidence()).isBetween(0.0, 1.0);
     });
@@ -232,7 +246,7 @@ class EtaIT {
     EtaState stored = mongo.findById(shipment, EtaState.class);
 
     assertThat(stored).isNotNull();
-    assertThat(stored.stopId()).isEqualTo("chi-dc");
+    assertThat(stored.stopId()).isEqualTo("del-okhla");
     assertThat(stored.estimatedArrival()).isEqualTo(etas.getLast().estimatedArrival());
     assertThat(stored.remainingKm()).isEqualTo(etas.getLast().remainingKm());
     // The model is kept too, so a restart resumes knowing roughly how fast this truck travels
@@ -302,7 +316,7 @@ class EtaIT {
     String unplanned = shipment + "-UNPLANNED";
 
     for (int minute = 0; minute <= 40; minute += 5) {
-      publishFor(unplanned, at(unplanned, minute, kmSouth(60 - minute), CRUISE_KPH));
+      publishFor(unplanned, at(unplanned, minute, kmSouth(40 - minute * 0.8), CRUISE_KPH));
     }
 
     await().atMost(Duration.ofSeconds(30)).until(() -> store.currentPosition(unplanned).isPresent());
@@ -321,20 +335,20 @@ class EtaIT {
   private static final Instant TRUE_ARRIVAL = T0.plus(Duration.ofMinutes(110));
 
   /**
-   * 120 km out, driving in, with twenty minutes of crawling in the middle.
+   * 80 km out, driving in, with twenty minutes of crawling in the middle.
    *
-   * <p>Cruise covers 6 km of straight line every five minutes, which is 72 km/h along the line and
-   * the 85 km/h the truck reports along the road. The crawl covers 3 km and reports half the speed.
-   * Adding it up: sixty kilometres in the first fifty minutes, twelve in the next twenty, and the
-   * last forty-eight in the forty minutes after that — 110 minutes in all.
+   * <p>Cruise covers 4 km of straight line every five minutes, which is 48 km/h along the line and
+   * the 62.4 km/h the truck reports along the road. The crawl covers 2 km and reports half the
+   * speed. Adding it up: forty kilometres in the first fifty minutes, eight in the next twenty, and
+   * the last thirty-two in the forty minutes after that — 110 minutes in all.
    */
   private void driveTheScriptedApproach() {
-    double remainingKm = 120;
+    double remainingKm = 80;
 
     for (int minute = 0; minute <= 110; minute += 5) {
       boolean crawling = minute >= 50 && minute < 70;
       publish(at(minute, kmSouth(remainingKm), crawling ? CRAWL_KPH : CRUISE_KPH));
-      remainingKm -= crawling ? 3 : 6;
+      remainingKm -= crawling ? CRAWL_STEP_KM : CRUISE_STEP_KM;
     }
   }
 
@@ -410,7 +424,7 @@ class EtaIT {
         .until(
             () -> {
               GeofenceState state =
-                  mongo.findById(GeofenceState.idFor(shipment, "chi-dc"), GeofenceState.class);
+                  mongo.findById(GeofenceState.idFor(shipment, "del-okhla"), GeofenceState.class);
               return state != null && state.arrivalAnnounced();
             });
   }

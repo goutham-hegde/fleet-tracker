@@ -11,7 +11,7 @@ import java.util.Objects;
  * separation is what lets several trucks run the same lane at once without interfering, and it is
  * why the moving parts live in {@code Truck} rather than here.
  *
- * @param id stable identifier, e.g. "chi-dal-i55"
+ * @param id stable identifier, e.g. "del-bom-nh48"
  * @param name human-readable lane description
  * @param stops at least two, in the order they are visited
  * @param legs derived from {@code stops}; always {@code stops.size() - 1} of them
@@ -21,10 +21,15 @@ public record Route(String id, String name, List<Stop> stops, List<Leg> legs) {
   /**
    * How much longer a real road is than the straight line between its endpoints.
    *
-   * <p>Roads bend around rivers, mountains and property lines, and in cities they follow a grid,
-   * which costs distance whenever the destination is not due north or due east. Empirically the
-   * driving distance between two US points averages 1.15 to 1.25 times the great-circle distance,
-   * with the ratio highest for short urban hops and lowest for long interstate runs.
+   * <p>Roads bend around rivers, hills and property lines, and they detour via the towns the
+   * network was built to connect rather than heading straight for the destination. On the Indian
+   * national highway network that detour is larger than on a grid-planned one: driving distance
+   * between two points typically runs 1.25 to 1.35 times the great-circle distance, with the ratio
+   * highest for short hops between neighbouring districts and lowest along a corridor like NH-48
+   * that was built end to end.
+   *
+   * <p>This was 1.18 while the simulator ran US interstate lanes. Changing the geography without
+   * changing this number would have quietly made every Indian lane 10% shorter than it is.
    *
    * <p>The simulator drives the straight line but bills the truck for the longer road, so that the
    * <em>time</em> a leg takes is realistic even though the <em>path</em> is simplified. Getting
@@ -32,7 +37,7 @@ public record Route(String id, String name, List<Stop> stops, List<Leg> legs) {
    * platform computes would look impressively accurate, because the trucks would be cheating in
    * exactly the way the naive ETA calculation assumes they can.
    */
-  public static final double ROAD_CIRCUITY = 1.18;
+  public static final double ROAD_CIRCUITY = 1.30;
 
   public Route {
     Objects.requireNonNull(id, "id");

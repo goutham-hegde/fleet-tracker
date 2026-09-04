@@ -18,13 +18,13 @@ import java.util.List;
  *
  * <ul>
  *   <li><b>No position, ever.</b> The only location is a city and a state in an {@code MS1}
- *       segment: {@code MS1*MEMPHIS*TN*US}. That is a true and useful statement which cannot be
+ *       segment: {@code MS1*BHIWANDI*MH*IN}. That is a true and useful statement which cannot be
  *       drawn on a map, geofenced, or compared to a previous position until something geocodes it.
  *       It is why {@link com.fleettracking.events.LocationHint} is a distinct type from
  *       {@link com.fleettracking.events.GeoPoint} — the difference between knowing where a truck is
  *       and knowing what the carrier called the place is worth having in the type system.
  *   <li><b>Deliberately not carrying our stop id.</b> A carrier does not know the identifiers in
- *       this platform's route model, so matching "MEMPHIS TN" to the Memphis hub is real work for
+ *       this platform's route model, so matching "BHIWANDI MH" to the Bhiwandi DC is real work for
  *       M2 rather than a lookup. Putting a stop id on the wire here would have quietly deleted the
  *       hardest part of the problem.
  *   <li><b>Two separate delays.</b> The back office takes {@code filingDelay} to enter an event at
@@ -203,7 +203,9 @@ public class Edi214Emitter implements TickObserver {
             "MS1",
             status.stop().city().toUpperCase(java.util.Locale.ROOT),
             status.stop().state(),
-            "US"));
+            // ISO 3166 alpha-2, as X12 expects. "IN" while the fleet runs Indian lanes; this
+            // read "US" and is the one field in the segment that is not derived from the stop.
+            "IN"));
 
     // ST, B10, LX, AT7, MS1, and the SE about to be written.
     int segmentCount = 6;

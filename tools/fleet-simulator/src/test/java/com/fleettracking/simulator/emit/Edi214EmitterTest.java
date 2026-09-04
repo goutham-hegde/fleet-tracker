@@ -44,7 +44,7 @@ class Edi214EmitterTest {
 
   private static List<TruckTransition> departedPickup() {
     return List.of(
-        new TruckTransition.Departed("VEH-0007", "SHP-CHI-0007", Snapshots.PICKUP, Snapshots.AT));
+        new TruckTransition.Departed("VEH-0007", "SHP-DEL-0007", Snapshots.PICKUP, Snapshots.AT));
   }
 
   @Test
@@ -84,12 +84,12 @@ class Edi214EmitterTest {
     run(emitter(), 120, departedPickup());
 
     String body = sink.messages().getFirst().body();
-    assertThat(body).contains("MS1*CHICAGO*IL*US~");
-    // The stop's real position is 41.8781, -87.6298 and none of it goes on the wire.
-    assertThat(body).doesNotContain("41.8");
-    assertThat(body).doesNotContain("-87.6");
+    assertThat(body).contains("MS1*DELHI*DL*IN~");
+    // The stop's real position is 28.5355, 77.2730 and none of it goes on the wire.
+    assertThat(body).doesNotContain("28.5355");
+    assertThat(body).doesNotContain("77.2730");
     // Nor does the carrier know this platform's stop identifiers.
-    assertThat(body).doesNotContain("chi-dc");
+    assertThat(body).doesNotContain("del-okhla");
   }
 
   @Test
@@ -111,7 +111,7 @@ class Edi214EmitterTest {
         120,
         List.of(
             new TruckTransition.Arrived(
-                "VEH-0007", "SHP-CHI-0007", Snapshots.DELIVERY, Snapshots.AT)));
+                "VEH-0007", "SHP-DEL-0007", Snapshots.DELIVERY, Snapshots.AT)));
     // X1: arrived at delivery location.
     assertThat(arrivals.messages().getFirst().body()).contains("AT7*X1*NS***");
   }
@@ -142,7 +142,7 @@ class Edi214EmitterTest {
         120,
         List.of(
             new TruckTransition.Arrived(
-                "VEH-0007", "SHP-CHI-0007", Snapshots.WAYPOINT, Snapshots.AT)));
+                "VEH-0007", "SHP-DEL-0007", Snapshots.WAYPOINT, Snapshots.AT)));
 
     assertThat(sink.messages()).isEmpty();
   }
@@ -155,14 +155,14 @@ class Edi214EmitterTest {
         120,
         List.of(
             new TruckTransition.Departed(
-                "VEH-0007", "SHP-CHI-0007", Snapshots.PICKUP, Snapshots.AT),
+                "VEH-0007", "SHP-DEL-0007", Snapshots.PICKUP, Snapshots.AT),
             new TruckTransition.Arrived(
-                "VEH-0002", "SHP-LAX-0002", Snapshots.DELIVERY, Snapshots.AT)));
+                "VEH-0002", "SHP-HYD-0002", Snapshots.DELIVERY, Snapshots.AT)));
 
     assertThat(sink.messages()).hasSize(1);
     String body = sink.messages().getFirst().body();
     assertThat(body).contains("ST*214*0001~").contains("ST*214*0002~").contains("GE*2*");
-    assertThat(body).contains("SHP-CHI-0007").contains("SHP-LAX-0002");
+    assertThat(body).contains("SHP-DEL-0007").contains("SHP-HYD-0002");
     // A batch belongs to no single shipment, so it cannot be keyed until M2 splits it.
     assertThat(sink.messages().getFirst().routingKey()).isNull();
   }

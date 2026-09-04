@@ -57,12 +57,12 @@ public final class Geo {
    * {@code [0, 360)}.
    *
    * <p><b>"Initial" is load-bearing.</b> A great-circle path does not hold a constant compass
-   * heading — the shortest route from Chicago to Los Angeles starts out pointing noticeably south
-   * of west and ends pointing north of it. So this is the heading right now, at {@code from}, and
-   * a truck following a long leg has to recompute it as it goes rather than setting it once. At
-   * the sub-kilometre steps this simulator ticks in, the drift per step is negligible; over a
-   * 3 000 km leg it is tens of degrees, which is the difference between a plausible heading field
-   * and an obviously fake one.
+   * heading — the shortest route from Delhi to New York starts out pointing almost due north, over
+   * the pole, rather than west as a flat map suggests. So this is the heading right now, at {@code
+   * from}, and a truck following a long leg has to recompute it as it goes rather than setting it
+   * once. At the sub-kilometre steps this simulator ticks in, the drift per step is negligible; over
+   * the 540 km Jaipur-Ahmedabad leg it is a couple of degrees, and over an intercontinental one it
+   * is tens — which is the difference between a plausible heading field and an obviously fake one.
    */
   public static double initialBearingDegrees(GeoPoint from, GeoPoint to) {
     double lat1 = Math.toRadians(from.latitude());

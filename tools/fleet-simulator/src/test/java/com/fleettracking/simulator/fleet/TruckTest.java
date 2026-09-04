@@ -32,15 +32,15 @@ class TruckTest {
   /** A three-stop route with short legs, so a full run is a few hundred ticks rather than hours. */
   @BeforeEach
   void setUp() {
-    Stop origin = stop("dc-chi", 41.8781, -87.6298, Duration.ofMinutes(1), Stop.StopKind.PICKUP);
+    Stop origin = stop("dc-del", 28.5355, 77.2730, Duration.ofMinutes(1), Stop.StopKind.PICKUP);
     // Roughly 5 km north-east, then another 4 km east.
-    Stop middle = stop("stop-a", 41.9100, -87.5800, Duration.ofSeconds(90), Stop.StopKind.DELIVERY);
-    Stop last = stop("stop-b", 41.9150, -87.5300, Duration.ofSeconds(30), Stop.StopKind.DELIVERY);
+    Stop middle = stop("stop-a", 28.5680, 77.3210, Duration.ofSeconds(90), Stop.StopKind.DELIVERY);
+    Stop last = stop("stop-b", 28.5730, 77.3740, Duration.ofSeconds(30), Stop.StopKind.DELIVERY);
     route = Route.of("test-lane", "Test lane", List.of(origin, middle, last));
   }
 
   private static Stop stop(String id, double lat, double lon, Duration dwell, Stop.StopKind kind) {
-    return new Stop(id, id, "Chicago", "IL", new GeoPoint(lat, lon), 150, dwell, kind);
+    return new Stop(id, id, "Delhi", "DL", new GeoPoint(lat, lon), 150, dwell, kind);
   }
 
   private Truck truck() {
@@ -84,7 +84,7 @@ class TruckTest {
 
     assertThat(initial.phase()).isEqualTo(TruckPhase.DWELLING);
     assertThat(initial.speedKph()).isZero();
-    assertThat(initial.currentStopId()).isEqualTo("dc-chi");
+    assertThat(initial.currentStopId()).isEqualTo("dc-del");
     assertThat(initial.nextStopId()).isEqualTo("stop-a");
     assertThat(Geo.distanceMeters(initial.position(), route.origin().location())).isZero();
     // Already facing the first leg rather than pointing due north in the yard.
@@ -108,7 +108,7 @@ class TruckTest {
             .toList();
 
     assertThat(departures).hasSize(2); // origin and the middle stop; not the final one
-    assertThat(departures.getFirst().stop().id()).isEqualTo("dc-chi");
+    assertThat(departures.getFirst().stop().id()).isEqualTo("dc-del");
     assertThat(departures.getFirst().at()).isEqualTo(START.plusSeconds(60));
   }
 
@@ -271,7 +271,9 @@ class TruckTest {
 
     List<Double> cruising =
         run.snapshots().stream()
-            .filter(s -> s.phase() == TruckPhase.DRIVING && s.speedKph() > 80)
+            // Comfortably above the crawl and the braking curve, comfortably below the 60 km/h
+            // cruise these trucks now settle at. This read 80 while cruise was 100.
+            .filter(s -> s.phase() == TruckPhase.DRIVING && s.speedKph() > 45)
             .map(VehicleSnapshot::speedKph)
             .toList();
 

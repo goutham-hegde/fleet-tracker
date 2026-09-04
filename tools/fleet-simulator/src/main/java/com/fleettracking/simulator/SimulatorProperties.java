@@ -15,7 +15,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     time legible
  * @param timeScale how many simulated seconds pass per real second. At 1.0 the trucks run in real
  *     time, which is what a live demo wants — trucks visibly crawling across a map. At 60.0 a
- *     twelve-hour Chicago-Dallas run finishes in twelve minutes, which is what a soak test wants.
+ *     thirty-hour Delhi-Mumbai run finishes in thirty minutes, which is what a soak test wants.
  *     Raising this does <em>not</em> raise the event rate; it raises how much ground each tick
  *     covers, so the two knobs stay independent
  * @param trucks how many trucks to run. They are spread round-robin across the available lanes

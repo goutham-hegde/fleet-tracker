@@ -96,7 +96,7 @@ class PositionStoreIT {
 
   @Test
   void appendsHistoryAndSetsCurrentPosition() {
-    PositionEvent event = Positions.at("SHP-1", Duration.ZERO, 41.8781, -87.6298);
+    PositionEvent event = Positions.at("SHP-1", Duration.ZERO, 28.5355, 77.2730);
 
     assertThat(store.record(event, false)).isTrue();
 
@@ -106,8 +106,8 @@ class PositionStoreIT {
     assertThat(current.occurredAt()).isEqualTo(event.occurredAt());
     // GeoJSON is [longitude, latitude]; getX is longitude. If this ever reads 41.87 the swap has
     // been lost somewhere and every truck is in the wrong hemisphere.
-    assertThat(current.location().getX()).isEqualTo(-87.6298);
-    assertThat(current.location().getY()).isEqualTo(41.8781);
+    assertThat(current.location().getX()).isEqualTo(77.2730);
+    assertThat(current.location().getY()).isEqualTo(28.5355);
   }
 
   @Test
@@ -127,7 +127,7 @@ class PositionStoreIT {
   @Test
   void anOlderEventJoinsHistoryButDoesNotMoveCurrentPosition() {
     store.record(Positions.at("SHP-1", Duration.ofMinutes(5), 42.0, -87.0), false);
-    store.record(Positions.at("SHP-1", Duration.ZERO, 41.8781, -87.6298), false);
+    store.record(Positions.at("SHP-1", Duration.ZERO, 28.5355, 77.2730), false);
 
     assertThat(store.historyCount()).isEqualTo(2);
     CurrentPosition current = store.currentPosition("SHP-1").orElseThrow();

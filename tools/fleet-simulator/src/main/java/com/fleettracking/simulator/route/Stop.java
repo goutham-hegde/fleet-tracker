@@ -15,15 +15,15 @@ import java.util.Objects;
  * match its coordinates would make that test meaningless.
  *
  * <p>{@code geofenceRadiusMeters} likewise belongs to the stop rather than to a global setting: a
- * 400-acre distribution centre and a downtown loading dock are not the same size, and M3's
- * geofencing has to cope with both. A large yard needs a radius wide enough that a truck parked at
- * the far fence still counts as arrived; a kerbside dock needs one tight enough that traffic
+ * distribution centre the size of a village and a kerbside hospital dock are not the same size, and
+ * M3's geofencing has to cope with both. A large yard needs a radius wide enough that a truck parked
+ * at the far fence still counts as arrived; a kerbside dock needs one tight enough that traffic
  * passing on the street does not.
  *
  * @param id stable identifier, used as the stop reference in emitted events
- * @param name human-readable, e.g. "Chicago DC 4"
+ * @param name human-readable, e.g. "Bhiwandi DC"
  * @param city the city as a carrier would file it in EDI — no abbreviations
- * @param state two-letter US state code
+ * @param state two-letter Indian state code, as used on a GST registration — MH, KA, TN
  * @param location ground truth position; the geofence is centred here
  * @param geofenceRadiusMeters how close counts as "at" this stop
  * @param dwell how long the truck stays once it arrives — loading, paperwork, a driver break

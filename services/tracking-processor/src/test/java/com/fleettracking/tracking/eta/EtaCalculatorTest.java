@@ -35,30 +35,40 @@ class EtaCalculatorTest {
 
   private static final Instant T0 = Instant.parse("2026-09-01T08:00:00Z");
 
-  private static final double STOP_LAT = 41.8781;
-  private static final double STOP_LON = -87.6298;
+  private static final double STOP_LAT = 28.5355;
+  private static final double STOP_LON = 77.2730;
 
   /** One degree of latitude, in kilometres. Close enough to reason with. */
   private static final double KM_PER_DEGREE = 111.19;
 
-  private static final String SHIPMENT = "SHP-CHI-0001";
+  private static final String SHIPMENT = "SHP-DEL-0001";
 
   private final EtaCalculator calculator =
-      new EtaCalculator(Duration.ofMinutes(2), Duration.ofMinutes(5), 85.0, 1.18);
+      new EtaCalculator(Duration.ofMinutes(2), Duration.ofMinutes(5), NOMINAL_KPH, ROAD_CIRCUITY);
+
+  /**
+   * The platform's two stated assumptions, held here as named constants rather than as literals
+   * scattered through the arithmetic below. Both must match {@code application.yaml}; they moved
+   * together when the fleet moved from US interstates to Indian national highways, and a test
+   * carrying the old pair would have gone on passing against numbers nothing else used.
+   */
+  private static final double NOMINAL_KPH = 60.0;
+
+  private static final double ROAD_CIRCUITY = 1.30;
 
   // --- the estimate itself -------------------------------------------------------------------
 
   @Test
   void billsTheRoadRatherThanTheStraightLine() {
     // 100 km due south of the stop, holding a steady 100 km/h. The straight line would say one
-    // hour; the road is 18% longer, so it is 1 h 10 m 48 s.
+    // hour; the road is 30% longer, so it is 1 h 18 m.
     EtaDecision decision = evaluate(EtaState.initial(SHIPMENT), fix(T0, kmSouth(100), 100.0));
 
     EtaUpdated update = decision.update();
     assertThat(update).isNotNull();
-    assertThat(update.remainingKm()).isCloseTo(118.0, org.assertj.core.data.Offset.offset(0.5));
+    assertThat(update.remainingKm()).isCloseTo(130.0, org.assertj.core.data.Offset.offset(0.5));
     assertThat(Duration.between(T0, update.estimatedArrival()))
-        .isBetween(Duration.ofMinutes(70), Duration.ofMinutes(72));
+        .isBetween(Duration.ofMinutes(77), Duration.ofMinutes(79));
   }
 
   @Test
@@ -163,7 +173,7 @@ class EtaCalculatorTest {
     for (int i = 0; i < 120; i++) {
       double speed = i % 2 == 0 ? 88.0 : 102.0;
       at = at.plusSeconds(10);
-      remainingKm -= speed / 360.0 / 1.18;
+      remainingKm -= speed / 360.0 / ROAD_CIRCUITY;
       EtaDecision decision = evaluate(state, fix(at, kmSouth(remainingKm), speed));
       state = decision.state();
       if (decision.publishes()) {
@@ -351,7 +361,7 @@ class EtaCalculatorTest {
 
       // Ten seconds of driving. The odometer turns at the reported speed; the straight line to the
       // stop shortens by less, because the road is longer than the line.
-      remainingKm -= speedKph / 360.0 / 1.18;
+      remainingKm -= speedKph / 360.0 / ROAD_CIRCUITY;
       at = at.plusSeconds(10);
       tick++;
     }
@@ -415,15 +425,15 @@ class EtaCalculatorTest {
     List<ScheduledStop> stops =
         List.of(
             new ScheduledStop(
-                "stop-1", 0, "Chicago DC", "Chicago", "IL", STOP_LAT, STOP_LON, 400, "PICKUP"),
+                "stop-1", 0, "Okhla DC", "Delhi", "DL", STOP_LAT, STOP_LON, 400, "PICKUP"),
             new ScheduledStop(
-                "stop-2", 1, "Dallas DC", "Dallas", "TX", 32.7767, -96.797, 400, "DELIVERY"));
+                "stop-2", 1, "Bhiwandi DC", "Bhiwandi", "MH", 19.2813, 73.0483, 400, "DELIVERY"));
 
     Map<String, GeofenceState> byStop = new HashMap<>();
     for (GeofenceState state : states) {
       byStop.put(state.stopId(), state);
     }
-    return new ShipmentProgress(new Itinerary(SHIPMENT, "chi-dal-i55", stops), byStop);
+    return new ShipmentProgress(new Itinerary(SHIPMENT, "del-bom-nh48", stops), byStop);
   }
 
   /** A stop the vehicle is currently inside the fence of. */

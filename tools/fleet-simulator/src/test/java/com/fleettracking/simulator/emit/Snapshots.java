@@ -18,39 +18,39 @@ final class Snapshots {
 
   private Snapshots() {}
 
-  /** A dry-van truck driving down the Chicago-Dallas lane at 100 km/h. */
+  /** A dry-van truck driving down the Delhi-Mumbai lane at 60 km/h. */
   static VehicleSnapshot driving() {
     return new VehicleSnapshot(
         "VEH-0007",
-        "SHP-CHI-0007",
+        "SHP-DEL-0007",
         "DEV-0007",
-        "chi-dal-i55",
+        "del-bom-nh48",
         AT,
-        new GeoPoint(41.878123456, -87.629812345),
-        100.0,
+        new GeoPoint(26.912345678, 75.787412345),
+        60.0,
         214.35,
         123456.789,
         TruckPhase.DRIVING,
         null,
-        "stl-xd",
+        "amd-aslali",
         18.4);
   }
 
-  /** A refrigerated truck sitting on a dock in Phoenix. */
+  /** A refrigerated truck sitting on a hospital dock in Kurnool. */
   static VehicleSnapshot coldChainDwelling() {
     return new VehicleSnapshot(
         "VEH-0002",
-        "SHP-LAX-0002",
+        "SHP-HYD-0002",
         "DEV-0002",
-        "lax-den-cold",
+        "hyd-blr-cold",
         AT,
-        new GeoPoint(33.4484, -112.0740),
+        new GeoPoint(15.8281, 78.0373),
         0.0,
         91.0,
         88_000.0,
         TruckPhase.DWELLING,
-        "phx-clinic",
-        "den-hosp",
+        "knl-clinic",
+        "blr-hosp",
         4.2);
   }
 
@@ -68,27 +68,27 @@ final class Snapshots {
     return new VehicleSnapshot(
         base.vehicleId(), base.shipmentId(), base.deviceId(), base.routeId(), base.at(),
         base.position(), 0.0, base.headingDegrees(), base.odometerKm(),
-        TruckPhase.COMPLETED, "dal-dc", null, base.temperatureCelsius());
+        TruckPhase.COMPLETED, "bom-bhiwandi", null, base.temperatureCelsius());
   }
 
   static final com.fleettracking.simulator.route.Stop PICKUP =
       new com.fleettracking.simulator.route.Stop(
-          "chi-dc",
-          "Chicago DC",
-          "Chicago",
-          "IL",
-          new GeoPoint(41.8781, -87.6298),
+          "del-okhla",
+          "Okhla DC",
+          "Delhi",
+          "DL",
+          new GeoPoint(28.5355, 77.2730),
           400,
           java.time.Duration.ofMinutes(75),
           com.fleettracking.simulator.route.Stop.StopKind.PICKUP);
 
   static final com.fleettracking.simulator.route.Stop DELIVERY =
       new com.fleettracking.simulator.route.Stop(
-          "mem-hub",
-          "Memphis hub",
-          "Memphis",
-          "TN",
-          new GeoPoint(35.1495, -90.0490),
+          "amd-aslali",
+          "Aslali crossdock",
+          "Ahmedabad",
+          "GJ",
+          new GeoPoint(23.0225, 72.5714),
           400,
           java.time.Duration.ofMinutes(65),
           com.fleettracking.simulator.route.Stop.StopKind.DELIVERY);
@@ -96,11 +96,11 @@ final class Snapshots {
   /** A fuel stop: a real arrival that no carrier would ever file an EDI status for. */
   static final com.fleettracking.simulator.route.Stop WAYPOINT =
       new com.fleettracking.simulator.route.Stop(
-          "sat-fuel",
-          "San Antonio fuel stop",
-          "San Antonio",
-          "TX",
-          new GeoPoint(29.4241, -98.4936),
+          "pnv-fuel",
+          "Panvel fuel stop",
+          "Panvel",
+          "MH",
+          new GeoPoint(18.9894, 73.1175),
           200,
           java.time.Duration.ofMinutes(20),
           com.fleettracking.simulator.route.Stop.StopKind.WAYPOINT);

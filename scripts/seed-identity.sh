@@ -26,16 +26,16 @@ command -v mongosh >/dev/null 2>&1 \
 log "Seeding $FLEET_SIZE assignments into $DB.$COLLECTION at $MONGO_URI"
 
 # The lanes, in the order the simulator deals trucks onto them: truck 1 runs the
-# Chicago lane, truck 2 the Los Angeles cold-chain lane, and so on round-robin.
+# Delhi-Mumbai lane, truck 2 the Hyderabad cold-chain lane, and so on round-robin.
 # Generated from that rule rather than listed by hand, because it is the same rule
 # the simulator uses -- a hand-typed list would be a second, drifting statement of
 # the fleet rather than a copy of it.
 mongosh "$MONGO_URI" --quiet --eval "
   db = db.getSiblingDB('$DB');
-  const lanes = ['CHI', 'LAX', 'ATL', 'HOU'];
+  const lanes = ['DEL', 'HYD', 'BLR', 'BOM'];
 
   // Backdated deliberately. The committed contract fixtures in docs/samples were
-  // captured on 2026-08-31, and a window opening 'now' would make every one of them
+  // captured on 2026-09-03, and a window opening 'now' would make every one of them
   // resolve to nothing -- a failure that looks like four broken normalizers rather
   // than like reference data that was never backdated.
   const epoch = ISODate('2026-01-01T00:00:00Z');

@@ -12,8 +12,8 @@ import java.time.Duration;
  * check the braking curve can hand in a profile with absurd deceleration and watch what happens,
  * without touching the movement code.
  *
- * <p>The defaults describe a loaded class-8 tractor-trailer, which is what most of this platform's
- * freight moves on.
+ * <p>The defaults describe a loaded multi-axle goods vehicle on Indian national highways, which is
+ * what most of this platform's freight moves on.
  *
  * @param cruiseSpeedKph the speed the driver settles at on open road
  * @param accelerationMps2 how quickly it gains speed, m/s². A loaded semi manages roughly 0.4 —
@@ -34,9 +34,18 @@ public record DriverProfile(
     double speedVariationKph,
     Duration speedVariationPeriod) {
 
-  /** A loaded tractor-trailer running interstate lanes. */
+  /**
+   * A loaded goods vehicle running national highway lanes.
+   *
+   * <p>Sixty, not the hundred this held while the lanes were US interstates. Two things cap an
+   * Indian truck well below a European or American one: goods vehicles must carry a speed limiting
+   * device set to 80 km/h, and highway traffic is mixed — the same carriageway carries buses,
+   * tractors and two-wheelers, so a settled cruise of sixty is what the road actually gives back.
+   * The six km/h of wander is proportionally larger against sixty than it was against a hundred,
+   * which is the right direction: Indian highway speed varies more, not less.
+   */
   public static final DriverProfile LOADED_SEMI =
-      new DriverProfile(100.0, 0.4, 0.8, 6.0, Duration.ofMinutes(3));
+      new DriverProfile(60.0, 0.4, 0.8, 6.0, Duration.ofMinutes(3));
 
   public DriverProfile {
     if (cruiseSpeedKph <= 0) {

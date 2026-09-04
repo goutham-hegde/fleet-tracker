@@ -66,7 +66,7 @@ class ReeferEmitterTest {
     run(emitter(true), 40, Snapshots.driving(), Snapshots.coldChainDwelling());
 
     assertThat(sink.messages()).isNotEmpty();
-    // The dry van on the Chicago lane reports nothing at all.
+    // The dry van on the Delhi-Mumbai lane reports nothing at all.
     assertThat(sink.messages()).allSatisfy(m -> assertThat(m.routingKey()).isEqualTo("DEV-0002"));
   }
 

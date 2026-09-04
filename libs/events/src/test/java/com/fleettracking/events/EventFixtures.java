@@ -33,7 +33,7 @@ final class EventFixtures {
     String raw =
         """
         {"unit":{"id":"TLM-88213","fw":"4.2.1"},\
-        "gps":{"lat":35.1495,"lon":-90.0490,"hdop":0.8},\
+        "gps":{"lat":15.8281,"lon":78.0373,"hdop":0.8},\
         "motion":{"speed_mph":58.3,"heading":271.5,"odometer_mi":184203.4},\
         "ts":"2026-08-27T14:03:11.482913041Z"}""";
     return new PositionEvent(
@@ -43,7 +43,7 @@ final class EventFixtures {
         "TLM-88213",
         OCCURRED,
         RECEIVED,
-        new GeoPoint(35.1495, -90.0490),
+        new GeoPoint(15.8281, 78.0373),
         93.8, // 58.3 mph converted
         271.5,
         296446.7, // 184203.4 mi converted
@@ -62,7 +62,7 @@ final class EventFixtures {
             + "ST*214*0001~\n"
             + "B10*4471*SHP-2026-0088412*CARRIER01~\n"
             + "AT7*X1*NS***20260827*1403*ET~\n"
-            + "MS1*MEMPHIS*TN*US~\n"
+            + "MS1*KURNOOL*AP*IN~\n"
             + "SE*6*0001~";
     return new StatusEvent(
         "evt-01J9Z4K8M2P7QR3T5V6W8X9YB1",
@@ -73,7 +73,7 @@ final class EventFixtures {
         RECEIVED,
         StatusCode.ARRIVED_AT_STOP,
         null, // no coordinates, ever
-        new LocationHint("MEMPHIS", "TN", "38103", "US"),
+        new LocationHint("KURNOOL", "AP", "518001", "IN"),
         new TemperatureReading(-18.4, -20.0),
         "STOP-3",
         "CONSIGNEE CLOSED",
@@ -87,7 +87,7 @@ final class EventFixtures {
         OCCURRED,
         "evt-01J9Z4K8M2P7QR3T5V6W8X9YA0",
         "STOP-3",
-        new GeoPoint(35.1495, -90.0490),
+        new GeoPoint(15.8281, 78.0373),
         Instant.parse("2026-08-27T13:30:00Z"));
   }
 

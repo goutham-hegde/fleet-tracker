@@ -52,8 +52,8 @@ class TelematicsEmitterTest {
     run(emitter(Duration.ofSeconds(30)), Snapshots.driving(), 60);
 
     JsonNode gps = sink.firstJson().get("gps");
-    // 100 km/h is 62.1 mph. A normalizer that forgets to convert produces a truck doing 100 mph.
-    assertThat(gps.get("speedMph").doubleValue()).isCloseTo(62.1, within(0.1));
+    // 60 km/h is 37.3 mph. A normalizer that forgets to convert produces a truck doing 60 mph.
+    assertThat(gps.get("speedMph").doubleValue()).isCloseTo(37.3, within(0.1));
     assertThat(sink.firstJson().get("odometer").get("unit").stringValue()).isEqualTo("mi");
     assertThat(sink.firstJson().get("odometer").get("value").doubleValue())
         .isCloseTo(76_712.4, within(0.5)); // 123456.789 km
@@ -101,7 +101,7 @@ class TelematicsEmitterTest {
     run(emitter(Duration.ofSeconds(30)), Snapshots.driving(), 60);
 
     // Six decimal places is about a tenth of a metre; the snapshot carries nine.
-    assertThat(sink.firstJson().get("gps").get("lat").doubleValue()).isEqualTo(41.878123);
+    assertThat(sink.firstJson().get("gps").get("lat").doubleValue()).isEqualTo(26.912346);
   }
 
   @Test

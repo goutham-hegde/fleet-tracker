@@ -20,11 +20,11 @@ class RouteTest {
   @Test
   @DisplayName("derives one fewer leg than it has stops, in order")
   void derivesLegs() {
-    Stop a = stop("a", 41.8781, -87.6298, Duration.ofMinutes(30));
-    Stop b = stop("b", 38.6270, -90.1994, Duration.ofMinutes(45));
-    Stop c = stop("c", 32.7767, -96.7970, Duration.ofHours(1));
+    Stop a = stop("a", 28.5355, 77.2730, Duration.ofMinutes(30));
+    Stop b = stop("b", 26.9124, 75.7873, Duration.ofMinutes(45));
+    Stop c = stop("c", 23.0225, 72.5714, Duration.ofHours(1));
 
-    Route route = Route.of("chi-stl-dal", "Chicago to Dallas via St. Louis", List.of(a, b, c));
+    Route route = Route.of("del-jai-amd", "Delhi to Ahmedabad via Jaipur", List.of(a, b, c));
 
     assertThat(route.legs()).hasSize(2);
     assertThat(route.legs().get(0).from()).isEqualTo(a);
@@ -36,16 +36,16 @@ class RouteTest {
   @Test
   @DisplayName("total distance is the sum of the legs, and road distance is longer")
   void totals() {
-    Stop a = stop("a", 41.8781, -87.6298, Duration.ZERO);
-    Stop b = stop("b", 38.6270, -90.1994, Duration.ZERO);
-    Stop c = stop("c", 32.7767, -96.7970, Duration.ZERO);
+    Stop a = stop("a", 28.5355, 77.2730, Duration.ZERO);
+    Stop b = stop("b", 26.9124, 75.7873, Duration.ZERO);
+    Stop c = stop("c", 23.0225, 72.5714, Duration.ZERO);
     Route route = Route.of("r", "r", List.of(a, b, c));
 
     double expected =
         Geo.distanceMeters(a.location(), b.location()) + Geo.distanceMeters(b.location(), c.location());
 
     assertThat(route.totalDistanceMeters()).isCloseTo(expected, within(1e-6));
-    // Going via St. Louis is a detour, so the two-leg total must exceed the direct line.
+    // Going via Jaipur is a detour, so the two-leg total must exceed the direct line.
     assertThat(route.totalDistanceMeters())
         .isGreaterThan(Geo.distanceMeters(a.location(), c.location()));
     assertThat(route.totalRoadDistanceMeters())
@@ -60,9 +60,9 @@ class RouteTest {
             "r",
             "r",
             List.of(
-                stop("a", 41.8781, -87.6298, Duration.ofMinutes(30)),
-                stop("b", 38.6270, -90.1994, Duration.ofMinutes(45)),
-                stop("c", 32.7767, -96.7970, Duration.ofHours(1))));
+                stop("a", 28.5355, 77.2730, Duration.ofMinutes(30)),
+                stop("b", 26.9124, 75.7873, Duration.ofMinutes(45)),
+                stop("c", 23.0225, 72.5714, Duration.ofHours(1))));
 
     assertThat(route.totalDwell()).isEqualTo(Duration.ofMinutes(135));
   }
@@ -70,9 +70,9 @@ class RouteTest {
   @Test
   @DisplayName("origin and destination are the ends of the itinerary")
   void ends() {
-    Stop a = stop("a", 41.8781, -87.6298, Duration.ZERO);
-    Stop c = stop("c", 32.7767, -96.7970, Duration.ZERO);
-    Route route = Route.of("r", "r", List.of(a, stop("b", 38.6270, -90.1994, Duration.ZERO), c));
+    Stop a = stop("a", 28.5355, 77.2730, Duration.ZERO);
+    Stop c = stop("c", 23.0225, 72.5714, Duration.ZERO);
+    Route route = Route.of("r", "r", List.of(a, stop("b", 26.9124, 75.7873, Duration.ZERO), c));
 
     assertThat(route.origin()).isEqualTo(a);
     assertThat(route.destination()).isEqualTo(c);
@@ -81,7 +81,7 @@ class RouteTest {
   @Test
   @DisplayName("rejects a route that does not go anywhere")
   void rejectsSingleStopRoute() {
-    List<Stop> one = List.of(stop("a", 41.8781, -87.6298, Duration.ZERO));
+    List<Stop> one = List.of(stop("a", 28.5355, 77.2730, Duration.ZERO));
     assertThatThrownBy(() -> Route.of("r", "r", one))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("at least two stops");
@@ -93,7 +93,7 @@ class RouteTest {
     List<Stop> mutable =
         new java.util.ArrayList<>(
             List.of(
-                stop("a", 41.8781, -87.6298, Duration.ZERO),
+                stop("a", 28.5355, 77.2730, Duration.ZERO),
                 stop("b", 32.7767, -96.7970, Duration.ZERO)));
     Route route = Route.of("r", "r", mutable);
 
@@ -108,7 +108,7 @@ class RouteTest {
     assertThatThrownBy(
             () ->
                 new Stop(
-                    "a", "a", "Chicago", "IL", new GeoPoint(41.8781, -87.6298), 0,
+                    "a", "a", "Delhi", "DL", new GeoPoint(28.5355, 77.2730), 0,
                     Duration.ZERO, Stop.StopKind.PICKUP))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("geofenceRadiusMeters");

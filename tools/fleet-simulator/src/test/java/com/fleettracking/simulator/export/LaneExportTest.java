@@ -35,7 +35,7 @@ class LaneExportTest {
 
     assertThat(catalogue.lanes()).hasSameSizeAs(Lanes.ALL);
     assertThat(catalogue.lanes()).extracting(LaneExport.Lane::code)
-        .containsExactly("CHI", "LAX", "ATL", "HOU");
+        .containsExactly("DEL", "HYD", "BLR", "BOM");
   }
 
   @Test

@@ -32,7 +32,7 @@ class IngestServiceTest {
   private static final String GOOD =
       """
       {"deviceId":"TLM-0003","vehicle":{"id":"VEH-0003"},
-       "gps":{"lat":35.1495,"lon":-90.049,"speedMph":62.5,"headingDeg":47.4,"hdop":1.2,
+       "gps":{"lat":12.92014,"lon":77.65032,"speedMph":62.5,"headingDeg":134.0,"hdop":1.2,
               "fixTime":"2026-08-31T14:05:00Z"},
        "odometer":{"value":100.0,"unit":"mi"},"sentAt":"2026-08-31T14:05:02Z"}
       """;
@@ -65,7 +65,7 @@ class IngestServiceTest {
     assertThat(outcome.deadLettered()).isZero();
     assertThat(publisher.published()).hasSize(1);
     assertThat(publisher.deadLettered()).isEmpty();
-    assertThat(publisher.published().getFirst().shipmentId()).isEqualTo("SHP-ATL-0003");
+    assertThat(publisher.published().getFirst().shipmentId()).isEqualTo("SHP-BLR-0003");
   }
 
   @Test
@@ -106,7 +106,7 @@ class IngestServiceTest {
             return NormalizationResult.of(
                 new PositionEvent(
                     "id-1",
-                    "SHP-ATL-0003",
+                    "SHP-BLR-0003",
                     "VEH-0003",
                     "TLM-0003",
                     RECEIVED,
@@ -143,7 +143,7 @@ class IngestServiceTest {
           @Override
           public NormalizationResult normalize(InboundMessage message) {
             return new NormalizationResult.Partial(
-                List.of(event("SHP-ATL-0003"), event("SHP-HOU-0004")),
+                List.of(event("SHP-BLR-0003"), event("SHP-BOM-0004")),
                 RejectionReason.MALFORMED_PAYLOAD,
                 "transaction set 3: truncated before SE terminator");
           }
@@ -213,7 +213,7 @@ class IngestServiceTest {
             return NormalizationResult.of(
                 new PositionEvent(
                     "id-1",
-                    "SHP-ATL-0003",
+                    "SHP-BLR-0003",
                     "VEH-0003",
                     "TLM-0003",
                     RECEIVED,

@@ -25,7 +25,7 @@ public final class Positions {
 
   /** A position for one shipment at an offset from {@link #T0}. */
   public static PositionEvent at(String shipmentId, Duration afterT0) {
-    return at(shipmentId, afterT0, 41.8781, -87.6298);
+    return at(shipmentId, afterT0, 28.5355, 77.2730);
   }
 
   /** A position for one shipment at an offset from {@link #T0}, at a stated point. */

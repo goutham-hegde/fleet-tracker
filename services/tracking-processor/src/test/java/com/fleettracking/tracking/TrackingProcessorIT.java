@@ -164,7 +164,7 @@ class TrackingProcessorIT {
 
   @Test
   void storesAPublishedPositionAsATimeSeriesMeasurement() {
-    PositionEvent event = Positions.at("SHP-A", Duration.ZERO, 41.8781, -87.6298);
+    PositionEvent event = Positions.at("SHP-A", Duration.ZERO, 28.5355, 77.2730);
 
     publish(event);
 
@@ -172,8 +172,8 @@ class TrackingProcessorIT {
     CurrentPosition current = store.currentPosition("SHP-A").orElseThrow();
     assertThat(current.eventId()).isEqualTo(event.eventId());
     assertThat(current.vehicleId()).isEqualTo(event.vehicleId());
-    assertThat(current.location().getX()).isEqualTo(-87.6298);
-    assertThat(current.location().getY()).isEqualTo(41.8781);
+    assertThat(current.location().getX()).isEqualTo(77.2730);
+    assertThat(current.location().getY()).isEqualTo(28.5355);
 
     assertThat(collectionType(PositionPoint.COLLECTION)).isEqualTo("timeseries");
   }

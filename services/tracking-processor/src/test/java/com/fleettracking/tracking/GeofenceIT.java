@@ -88,10 +88,13 @@ class GeofenceIT {
 
   private String shipment;
 
-  /** The Chicago DC, exactly as the committed lane catalogue states it. */
-  private static final double STOP_LAT = 41.8781;
+  /** The Okhla DC in Delhi, exactly as the committed lane catalogue states it. */
+  private static final double STOP_LAT = 28.5355;
 
-  private static final double STOP_LON = -87.6298;
+  private static final double STOP_LON = 77.2730;
+
+  /** Roughly nine kilometres due north of the yard — outside any fence in this itinerary. */
+  private static final double AWAY_LAT = 28.6155;
 
   @Autowired private PositionStore store;
   @Autowired private MongoOperations mongo;
@@ -145,18 +148,18 @@ class GeofenceIT {
     mongo.remove(new Query(), CurrentPosition.COLLECTION);
     mongo.remove(new Query(), GeofenceState.COLLECTION);
 
-    shipment = "SHP-CHI-%04d".formatted(NEXT_SHIPMENT.incrementAndGet());
+    shipment = "SHP-DEL-%04d".formatted(NEXT_SHIPMENT.incrementAndGet());
     mongo.save(
         new Itinerary(
             shipment,
-            "chi-dal-i55",
+            "del-bom-nh48",
             List.of(
                 new ScheduledStop(
-                    "chi-dc", 0, "Chicago DC", "Chicago", "IL", STOP_LAT, STOP_LON, 400, "PICKUP"),
+                    "del-okhla", 0, "Okhla DC", "Delhi", "DL", STOP_LAT, STOP_LON, 400, "PICKUP"),
                 // A second stop the truck never goes near, so the test also shows that evaluating
                 // every stop on every fix does not invent arrivals at the ones it skipped.
                 new ScheduledStop(
-                    "stl-xd", 1, "St. Louis", "St. Louis", "MO", 38.6270, -90.1994, 400,
+                    "jai-vki", 1, "Jaipur VKI depot", "Jaipur", "RJ", 26.9124, 75.7873, 400,
                     "DELIVERY"))));
   }
 
@@ -179,8 +182,8 @@ class GeofenceIT {
 
     assertThat(arrivals).hasSize(1);
     assertThat(departures).hasSize(1);
-    assertThat(arrivals.getFirst().stopId()).isEqualTo("chi-dc");
-    assertThat(departures.getFirst().stopId()).isEqualTo("chi-dc");
+    assertThat(arrivals.getFirst().stopId()).isEqualTo("del-okhla");
+    assertThat(departures.getFirst().stopId()).isEqualTo("del-okhla");
   }
 
   /** The arrival is stamped with the crossing, and the departure states the detention time. */
@@ -247,7 +250,7 @@ class GeofenceIT {
     awaitStopComplete();
 
     GeofenceState state =
-        mongo.findById(GeofenceState.idFor(shipment, "chi-dc"), GeofenceState.class);
+        mongo.findById(GeofenceState.idFor(shipment, "del-okhla"), GeofenceState.class);
 
     assertThat(state).isNotNull();
     assertThat(state.arrivalAnnounced()).isTrue();
@@ -255,7 +258,7 @@ class GeofenceIT {
     assertThat(state.isComplete()).isTrue();
 
     // The stop the truck never went near has no state at all, rather than an empty row.
-    assertThat(mongo.findById(GeofenceState.idFor(shipment, "stl-xd"), GeofenceState.class))
+    assertThat(mongo.findById(GeofenceState.idFor(shipment, "jai-vki"), GeofenceState.class))
         .isNull();
   }
 
@@ -267,7 +270,7 @@ class GeofenceIT {
   void aShipmentWithNoItineraryIsStoredButNotGeofenced() {
     String unplanned = shipment + "-UNPLANNED";
 
-    // Parked squarely inside the Chicago yard for an hour. The only thing separating this from the
+    // Parked squarely inside the Okhla yard for an hour. The only thing separating this from the
     // scripted route above is that nothing planned it, so nothing may be announced for it.
     for (int minute = 0; minute <= 60; minute += 10) {
       publish(at(unplanned, minute, STOP_LAT, STOP_LON));
@@ -290,16 +293,16 @@ class GeofenceIT {
    * 55, reporting every three minutes as telematics does; and from minute 60 it is away again.
    */
   private void driveTheScriptedRoute() {
-    publish(at(shipment, 0, 41.9581, -87.6298));
-    publish(at(shipment, 5, 41.9581, -87.6298));
+    publish(at(shipment, 0, AWAY_LAT, STOP_LON));
+    publish(at(shipment, 5, AWAY_LAT, STOP_LON));
 
     for (int minute = 10; minute <= 55; minute += 3) {
       publish(at(shipment, minute, STOP_LAT, STOP_LON));
     }
 
-    publish(at(shipment, 60, 41.9581, -87.6298));
-    publish(at(shipment, 65, 41.9581, -87.6298));
-    publish(at(shipment, 70, 41.9581, -87.6298));
+    publish(at(shipment, 60, AWAY_LAT, STOP_LON));
+    publish(at(shipment, 65, AWAY_LAT, STOP_LON));
+    publish(at(shipment, 70, AWAY_LAT, STOP_LON));
   }
 
   private static PositionEvent at(String shipmentId, int minute, double lat, double lon) {
@@ -352,7 +355,7 @@ class GeofenceIT {
         .until(
             () -> {
               GeofenceState state =
-                  mongo.findById(GeofenceState.idFor(shipment, "chi-dc"), GeofenceState.class);
+                  mongo.findById(GeofenceState.idFor(shipment, "del-okhla"), GeofenceState.class);
               return state != null && state.isComplete();
             });
   }

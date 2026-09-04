@@ -31,7 +31,7 @@ import java.util.Optional;
  *
  * <p>Roads bend. The simulator drives straight legs but bills its trucks for a road eighteen per
  * cent longer, precisely so that this calculation cannot cheat: an ETA that divided the straight
- * line by the reported speed would be short by that same eighteen per cent on every leg, and would
+ * line by the reported speed would be short by that same thirty per cent on every leg, and would
  * look excellent against a fleet that was cheating in exactly the way it assumed. So the straight
  * line is inflated by a circuity factor before anything is divided by anything.
  *

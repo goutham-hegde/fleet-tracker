@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 
 class FaultProfileTest {
 
-  private static final GeoPoint CHICAGO = new GeoPoint(41.8781, -87.6298);
+  private static final GeoPoint DELHI = new GeoPoint(28.5355, 77.2730);
 
   private static FaultProfile profile(FaultProperties properties) {
     return new FaultProfile(properties, new Random(3));
@@ -24,7 +24,7 @@ class FaultProfileTest {
     double total = 0;
     double worst = 0;
     for (int i = 0; i < 500; i++) {
-      double error = Geo.distanceMeters(CHICAGO, faults.perturb(CHICAGO));
+      double error = Geo.distanceMeters(DELHI, faults.perturb(DELHI));
       total += error;
       worst = Math.max(worst, error);
     }
@@ -40,7 +40,7 @@ class FaultProfileTest {
   void producesBadFixes() {
     FaultProfile faults = profile(new FaultProperties(true, 6.0, 1.0, 1500, 0, 0, 0));
 
-    double error = Geo.distanceMeters(CHICAGO, faults.perturb(CHICAGO));
+    double error = Geo.distanceMeters(DELHI, faults.perturb(DELHI));
 
     assertThat(error).isBetween(700.0, 2300.0);
   }
@@ -50,7 +50,7 @@ class FaultProfileTest {
   void masterSwitchDisablesEverything() {
     FaultProfile faults = profile(new FaultProperties(false, 25.0, 1.0, 1500, 1.0, 1.0, 1.0));
 
-    assertThat(faults.perturb(CHICAGO)).isEqualTo(CHICAGO);
+    assertThat(faults.perturb(DELHI)).isEqualTo(DELHI);
     assertThat(faults.drops()).isFalse();
     assertThat(faults.duplicates()).isFalse();
     assertThat(faults.malforms()).isFalse();
@@ -63,7 +63,7 @@ class FaultProfileTest {
     assertThat(onlyDrops.drops()).isTrue();
     assertThat(onlyDrops.duplicates()).isFalse();
     assertThat(onlyDrops.malforms()).isFalse();
-    assertThat(onlyDrops.perturb(CHICAGO)).isEqualTo(CHICAGO);
+    assertThat(onlyDrops.perturb(DELHI)).isEqualTo(DELHI);
 
     FaultProfile onlyMalformed = profile(new FaultProperties(true, 0, 0, 1500, 0, 0, 1.0));
     assertThat(onlyMalformed.drops()).isFalse();
@@ -74,7 +74,7 @@ class FaultProfileTest {
   @DisplayName("corruption is partial, so it still looks like the format it claims to be")
   void corruptsPartially() {
     FaultProfile faults = profile(new FaultProperties(true, 0, 0, 1500, 0, 0, 1.0));
-    String clean = "{\"sid\":\"SHP-CHI-0001\",\"lat\":41.8781,\"spd\":27.3}";
+    String clean = "{\"sid\":\"SHP-DEL-0001\",\"lat\":28.5355,\"spd\":16.7}";
 
     java.util.Set<String> shapes = new java.util.HashSet<>();
     for (int i = 0; i < 40; i++) {

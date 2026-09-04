@@ -33,8 +33,8 @@ class TelematicsNormalizerTest {
   // not one of the four unit conversions. Both kinds of test are needed.
   private static String moving() {
     return """
-        {"deviceId":"TLM-0003","vehicle":{"id":"VEH-0003","unitNumber":"0003","make":"International"},
-         "gps":{"lat":35.1495,"lon":-90.049,"speedMph":62.5,"headingDeg":47.4,
+        {"deviceId":"TLM-0003","vehicle":{"id":"VEH-0003","unitNumber":"0003","make":"Mahindra"},
+         "gps":{"lat":12.92014,"lon":77.65032,"speedMph":62.5,"headingDeg":134.0,
                 "satellites":9,"hdop":1.2,"fixTime":"2026-08-31T14:05:00Z"},
          "odometer":{"value":100.0,"unit":"mi"},
          "engine":{"rpm":1500,"coolantTempF":195,"fuelLevelPct":61.2,"ignition":"ON"},
@@ -61,7 +61,7 @@ class TelematicsNormalizerTest {
 
     // The feed named a vehicle and nothing else; the shipment came from reference data.
     assertThat(event.vehicleId()).isEqualTo("VEH-0003");
-    assertThat(event.shipmentId()).isEqualTo("SHP-ATL-0003");
+    assertThat(event.shipmentId()).isEqualTo("SHP-BLR-0003");
     // The device id is whatever reported, not something looked up: the telematics unit on this
     // truck is TLM-0003 while the reefer probe on the same trailer is DEV-0003.
     assertThat(event.deviceId()).isEqualTo("TLM-0003");
@@ -125,7 +125,7 @@ class TelematicsNormalizerTest {
   void wrapsAHeadingOfThreeHundredAndSixtyRoundToZero() {
     // A device reporting 359.97 and rounding to one decimal place emits exactly 360.0, which the
     // canonical envelope forbids because it is the same bearing as 0.
-    String body = moving().replace("\"headingDeg\":47.4", "\"headingDeg\":360.0");
+    String body = moving().replace("\"headingDeg\":134.0", "\"headingDeg\":360.0");
 
     assertThat(normalizeOne(body).headingDegrees()).isEqualTo(0.0);
   }

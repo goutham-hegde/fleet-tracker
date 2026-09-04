@@ -12,7 +12,7 @@ import java.util.Optional;
  * because a fixed list cannot express that an assignment starts and ends. What survives is its
  * usefulness to a unit test: a normalizer test is about unit conversion, timestamp parsing and
  * segment counting, and starting a database container to prove that {@code DEV-0002} maps to
- * {@code SHP-LAX-0002} would make those tests slower without making them stricter.
+ * {@code SHP-HYD-0002} would make those tests slower without making them stricter.
  *
  * <p>It honours validity windows rather than ignoring them, because a stub that answered every
  * instant identically would let a normalizer pass the wrong timestamp to the resolver and no test

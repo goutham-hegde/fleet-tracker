@@ -115,15 +115,19 @@ fleet:
       speed-half-life: 5m
 
       # What to assume for a shipment nothing has been learned about yet -- the first fix after a
-      # cold start. A motorway freight average. The confidence on that first estimate reports that
-      # it is an assumption rather than a measurement.
-      nominal-speed-kph: 85.0
+      # cold start. A national highway freight average: Indian goods vehicles carry a speed limiter
+      # set to 80 km/h and share the carriageway with everything else, so they settle nearer sixty
+      # than the eighty-five this held while the lanes were US interstates. The confidence on that
+      # first estimate reports that it is an assumption rather than a measurement.
+      nominal-speed-kph: 60.0
 
       # How much longer the road is than the straight line between two points. A stated assumption
       # of this platform, and where a real deployment would put a routing engine. The simulator
       # bills its trucks against this same ratio, so 1.0 here would make every estimate short by
-      # eighteen per cent -- which is exactly the mistake the simulator's design exists to expose.
-      road-circuity: 1.18
+      # thirty per cent -- which is exactly the mistake the simulator's design exists to expose.
+      # This and Route.ROAD_CIRCUITY are one number stated twice and must move together; it read
+      # 1.18 for the US interstate lanes and 1.30 for the Indian highway network.
+      road-circuity: 1.30
 
       # Shipment models held in memory. Bounded, evicting the least recently used; an evicted
       # model is in MongoDB and is read back on that shipment's next fix.

@@ -9,7 +9,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
  * One dispatch decision: this tractor, pulling this load, wearing this hardware, over this period.
  *
  * <p>The period is the whole reason this moved out of a configuration file. A YAML list can say
- * "VEH-0002 is pulling SHP-LAX-0002" and nothing else; it cannot say that the same tractor pulled a
+ * "VEH-0002 is pulling SHP-HYD-0002" and nothing else; it cannot say that the same tractor pulled a
  * different load yesterday, or that the trailer with probe {@code DEV-0002} bolted to it was
  * swapped onto another vehicle at noon. Freight reference data is a sequence of assignments with
  * start and end times, and a position stamped 09:42 has to resolve against whatever was true at

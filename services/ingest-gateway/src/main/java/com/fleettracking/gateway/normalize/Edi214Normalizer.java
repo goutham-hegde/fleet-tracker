@@ -53,10 +53,10 @@ import java.util.Optional;
  *   <li><b>One message, many events.</b> An interchange has no single shipment and therefore no
  *       Kafka key. It is split into one status per {@code ST}/{@code SE} transaction set before
  *       anything can be keyed, which is why success is a list.
- *   <li><b>A place, not a position.</b> The only location is {@code MS1*MEMPHIS*TN*US} — true,
+ *   <li><b>A place, not a position.</b> The only location is {@code MS1*KURNOOL*AP*IN} — true,
  *       useful, and impossible to draw on a map or compare with a GPS fix until something geocodes
  *       it. It becomes a {@link LocationHint} rather than a fabricated coordinate. Guessing the
- *       centroid of Memphis would put a truck 8 km from where it is and make every downstream
+ *       centroid of Bhiwandi would put a truck 8 km from where it is and make every downstream
  *       consumer believe it had a real fix.
  *   <li><b>Minute resolution.</b> {@code AT7} carries {@code HHMM} and no seconds, so every EDI
  *       timestamp is already rounded before it arrives. Two different events for one shipment can
@@ -314,7 +314,7 @@ public class Edi214Normalizer implements Normalizer {
             locationHint(set.ms1()),
             null,
             // No stop id either. The carrier does not know the identifiers in this platform's route
-            // model, so matching "MEMPHIS TN" to the Memphis hub is real work for a consumer rather
+            // model, so matching "BHIWANDI MH" to the Bhiwandi DC is real work for a consumer rather
             // than a lookup. Filling this in from the city name would be a guess wearing the
             // clothes of a fact.
             null,
@@ -323,7 +323,7 @@ public class Edi214Normalizer implements Normalizer {
   }
 
   /**
-   * {@code MS1*HOUSTON*TX*US} — a place name, which is not a place.
+   * {@code MS1*HYDERABAD*TG*IN} — a place name, which is not a place.
    *
    * <p>Kept as text in the shape the carrier sent it. The country code is constrained to two
    * characters by the envelope and the state to three, so a carrier sending something longer is

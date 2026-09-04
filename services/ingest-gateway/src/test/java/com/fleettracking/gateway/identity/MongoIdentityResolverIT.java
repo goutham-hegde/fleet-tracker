@@ -63,15 +63,15 @@ class MongoIdentityResolverIT {
 
   @Test
   void resolvesAVehicleInsideItsWindow() {
-    seed(Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("TLM-0002"), at(6), at(18)));
+    seed(Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("TLM-0002"), at(6), at(18)));
 
     assertThat(resolver.byVehicle("VEH-0002", at(12)))
-        .contains(new Identity("SHP-LAX-0002", "VEH-0002"));
+        .contains(new Identity("SHP-HYD-0002", "VEH-0002"));
   }
 
   @Test
   void resolvesNothingBeforeTheWindowOpens() {
-    seed(Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("TLM-0002"), at(6), at(18)));
+    seed(Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("TLM-0002"), at(6), at(18)));
 
     // A telematics unit reporting at 05:00 is reporting about a truck that had not been given this
     // load yet. Attributing the position to it would put a shipment on a map before it existed.
@@ -80,7 +80,7 @@ class MongoIdentityResolverIT {
 
   @Test
   void theWindowIncludesItsStartAndExcludesItsEnd() {
-    seed(Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("TLM-0002"), at(6), at(18)));
+    seed(Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("TLM-0002"), at(6), at(18)));
 
     assertThat(resolver.byVehicle("VEH-0002", at(6))).isPresent();
     assertThat(resolver.byVehicle("VEH-0002", at(18))).isEmpty();
@@ -90,7 +90,7 @@ class MongoIdentityResolverIT {
   void anOpenEndedAssignmentHasNoUpperBound() {
     // The normal state of a live fleet: dispatch has said when the load started and not when it
     // ends. Written as a null rather than a far-future sentinel, so the $or branch is load-bearing.
-    seed(Assignment.of("SHP-CHI-0001", "VEH-0001", List.of("TLM-0001"), at(6), null));
+    seed(Assignment.of("SHP-DEL-0001", "VEH-0001", List.of("TLM-0001"), at(6), null));
 
     assertThat(resolver.byVehicle("VEH-0001", at(23))).isPresent();
     assertThat(resolver.byVehicle("VEH-0001", DAY.plus(Duration.ofDays(400)))).isPresent();
@@ -101,13 +101,13 @@ class MongoIdentityResolverIT {
     // The whole reason reference data left the configuration file. Two consecutive loads on one
     // tractor, meeting exactly at 14:00.
     seed(
-        Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("TLM-0002"), at(2), at(14)),
-        Assignment.of("SHP-LAX-0042", "VEH-0002", List.of("TLM-0002"), at(14), null));
+        Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("TLM-0002"), at(2), at(14)),
+        Assignment.of("SHP-HYD-0042", "VEH-0002", List.of("TLM-0002"), at(14), null));
 
     assertThat(resolver.byVehicle("VEH-0002", at(13)).orElseThrow().shipmentId())
-        .isEqualTo("SHP-LAX-0002");
+        .isEqualTo("SHP-HYD-0002");
     assertThat(resolver.byVehicle("VEH-0002", at(15)).orElseThrow().shipmentId())
-        .isEqualTo("SHP-LAX-0042");
+        .isEqualTo("SHP-HYD-0042");
   }
 
   @Test
@@ -116,13 +116,13 @@ class MongoIdentityResolverIT {
     // 20:00, six hours after the tractor has already picked up the next one. Asking "now" would
     // attribute the end of one load to the start of another.
     seed(
-        Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("TLM-0002"), at(2), at(14)),
-        Assignment.of("SHP-LAX-0042", "VEH-0002", List.of("TLM-0042"), at(14), null));
+        Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("TLM-0002"), at(2), at(14)),
+        Assignment.of("SHP-HYD-0042", "VEH-0002", List.of("TLM-0042"), at(14), null));
 
     Instant stated = at(13).plus(Duration.ofMinutes(58));
-    assertThat(resolver.byShipment("SHP-LAX-0002", stated).orElseThrow().vehicleId())
+    assertThat(resolver.byShipment("SHP-HYD-0002", stated).orElseThrow().vehicleId())
         .isEqualTo("VEH-0002");
-    assertThat(resolver.byShipment("SHP-LAX-0002", at(20))).isEmpty();
+    assertThat(resolver.byShipment("SHP-HYD-0002", at(20))).isEmpty();
   }
 
   @Test
@@ -131,12 +131,12 @@ class MongoIdentityResolverIT {
     // that into a shipment and a vehicle.
     seed(
         Assignment.of(
-            "SHP-LAX-0002", "VEH-0002", List.of("TLM-0002", "DEV-0002"), at(0), null));
+            "SHP-HYD-0002", "VEH-0002", List.of("TLM-0002", "DEV-0002"), at(0), null));
 
     assertThat(resolver.byDevice("DEV-0002", at(9)))
-        .contains(new Identity("SHP-LAX-0002", "VEH-0002"));
+        .contains(new Identity("SHP-HYD-0002", "VEH-0002"));
     assertThat(resolver.byDevice("TLM-0002", at(9)))
-        .contains(new Identity("SHP-LAX-0002", "VEH-0002"));
+        .contains(new Identity("SHP-HYD-0002", "VEH-0002"));
   }
 
   @Test
@@ -146,8 +146,8 @@ class MongoIdentityResolverIT {
     // under an "as of now" resolver, and wrong in the most expensive way: a real temperature
     // reading filed against the wrong load.
     seed(
-        Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("DEV-0002"), at(0), at(12)),
-        Assignment.of("SHP-ATL-0003", "VEH-0003", List.of("DEV-0002"), at(12), null));
+        Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("DEV-0002"), at(0), at(12)),
+        Assignment.of("SHP-BLR-0003", "VEH-0003", List.of("DEV-0002"), at(12), null));
 
     assertThat(resolver.byDevice("DEV-0002", at(11)).orElseThrow().vehicleId()).isEqualTo("VEH-0002");
     assertThat(resolver.byDevice("DEV-0002", at(13)).orElseThrow().vehicleId()).isEqualTo("VEH-0003");
@@ -159,18 +159,18 @@ class MongoIdentityResolverIT {
     // Returning either would publish positions attributed to a load that may not be on the truck,
     // so the resolver returns neither and the message is dead-lettered.
     seed(
-        Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("TLM-0002"), at(0), at(18)),
-        Assignment.of("SHP-LAX-0099", "VEH-0002", List.of("TLM-0099"), at(6), null));
+        Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("TLM-0002"), at(0), at(18)),
+        Assignment.of("SHP-HYD-0099", "VEH-0002", List.of("TLM-0099"), at(6), null));
 
     assertThat(resolver.byVehicle("VEH-0002", at(9))).isEmpty();
     // Outside the overlap it is unambiguous again, and answering is correct.
     assertThat(resolver.byVehicle("VEH-0002", at(3)).orElseThrow().shipmentId())
-        .isEqualTo("SHP-LAX-0002");
+        .isEqualTo("SHP-HYD-0002");
   }
 
   @Test
   void anUnknownIdentifierResolvesToNothingRatherThanThrowing() {
-    seed(Assignment.of("SHP-LAX-0002", "VEH-0002", List.of("TLM-0002"), at(0), null));
+    seed(Assignment.of("SHP-HYD-0002", "VEH-0002", List.of("TLM-0002"), at(0), null));
 
     assertThat(resolver.byVehicle("VEH-9999", at(9))).isEmpty();
     assertThat(resolver.byDevice("DEV-9999", at(9))).isEmpty();
@@ -185,9 +185,9 @@ class MongoIdentityResolverIT {
     // the seed script after a cluster rebuild; with generated ids that would produce a second row
     // for the same assignment, and the resolver would report it as contradictory.
     Assignment first =
-        Assignment.of("SHP-CHI-0001", "VEH-0001", List.of("TLM-0001"), at(6), null);
+        Assignment.of("SHP-DEL-0001", "VEH-0001", List.of("TLM-0001"), at(6), null);
     Assignment corrected =
-        Assignment.of("SHP-CHI-0001", "VEH-0001", List.of("TLM-0001", "DEV-0001"), at(6), null);
+        Assignment.of("SHP-DEL-0001", "VEH-0001", List.of("TLM-0001", "DEV-0001"), at(6), null);
 
     mongo.save(first);
     mongo.save(corrected);

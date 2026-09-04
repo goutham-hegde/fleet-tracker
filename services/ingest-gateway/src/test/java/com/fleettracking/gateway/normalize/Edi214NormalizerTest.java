@@ -42,10 +42,10 @@ class Edi214NormalizerTest {
         + "*260831*1200*U*00401*000000101*0*P*>~"
         + "GS*QM*CARRIER01*FLEETTRACK*20260831*1200*101*X*004010~"
         + "ST*214*0001~"
-        + "B10*1645387*SHP-ATL-0003*FLTX~"
+        + "B10*1645387*SHP-BLR-0003*FLTX~"
         + "LX*1~"
         + "AT7*X1*NS***20260831*0930*UT~"
-        + "MS1*MEMPHIS*TN*US~"
+        + "MS1*HOSUR*TN*IN~"
         + "SE*6*0001~"
         + "GE*1*101~"
         + "IEA*1*000000101~";
@@ -157,18 +157,18 @@ class Edi214NormalizerTest {
 
     // The single most important property of this feed. A city and a state is a true statement that
     // cannot be drawn on a map or compared with a GPS fix until something geocodes it, and
-    // inventing the centroid of Memphis would make every consumer believe there was a real fix.
+    // inventing the centroid of Bhiwandi would make every consumer believe there was a real fix.
     assertThat(event.position()).isNull();
-    assertThat(event.location().city()).isEqualTo("MEMPHIS");
+    assertThat(event.location().city()).isEqualTo("HOSUR");
     assertThat(event.location().stateOrProvince()).isEqualTo("TN");
-    assertThat(event.location().countryCode()).isEqualTo("US");
+    assertThat(event.location().countryCode()).isEqualTo("IN");
   }
 
   @Test
   void namesNoStopBecauseTheCarrierDoesNotKnowOurRouteModel() {
     StatusEvent event = (StatusEvent) normalizeAll(interchange()).getFirst();
 
-    // Matching "MEMPHIS TN" to the Memphis hub is real work for a consumer. Filling this in here
+    // Matching "BHIWANDI MH" to the Bhiwandi DC is real work for a consumer. Filling this in here
     // from the city name would be a guess wearing the clothes of a fact.
     assertThat(event.stopId()).isNull();
     // No device either: a back-office translator is not a device.
@@ -300,7 +300,7 @@ class Edi214NormalizerTest {
   void noticesASegmentDroppedFromInsideATransactionSet() {
     // SE counts the segments between ST and SE inclusive. It is a checksum, and this is the only
     // thing that catches a segment lost in the middle of an otherwise well-formed file.
-    String body = interchange().replace("MS1*MEMPHIS*TN*US~", "");
+    String body = interchange().replace("MS1*HOSUR*TN*IN~", "");
 
     NormalizationResult result = normalize(body);
 

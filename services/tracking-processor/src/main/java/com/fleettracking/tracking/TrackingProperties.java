@@ -63,12 +63,12 @@ public record TrackingProperties(
    *     time rather than in messages, so it means the same thing for a telematics unit reporting
    *     every ten seconds and a phone reporting every two minutes
    * @param nominalSpeedKph what to assume before anything has been learned — the first fix of a
-   *     shipment this process has never seen. A motorway freight average; the confidence on that
+   *     shipment this process has never seen. A national highway freight average; the confidence on that
    *     first estimate says plainly that it is an assumption
    * @param roadCircuity how much longer the road is than the straight line. A stated assumption of
    *     this platform, and the place a real deployment would put a routing engine. The simulator
    *     bills its trucks against exactly this ratio, so an estimate that used 1.0 here would be
-   *     short by eighteen per cent on every leg
+   *     short by thirty per cent on every leg
    * @param cacheSize how many shipments' models to keep in memory. Bounded so that a process that
    *     has seen a hundred thousand loads holds a working set; an evicted model is in MongoDB and is
    *     read back on the shipment's next fix
@@ -83,8 +83,8 @@ public record TrackingProperties(
     public Eta {
       publishThreshold = publishThreshold == null ? Duration.ofMinutes(2) : publishThreshold;
       speedHalfLife = speedHalfLife == null ? Duration.ofMinutes(5) : speedHalfLife;
-      nominalSpeedKph = nominalSpeedKph == null ? 85.0 : nominalSpeedKph;
-      roadCircuity = roadCircuity == null ? 1.18 : roadCircuity;
+      nominalSpeedKph = nominalSpeedKph == null ? 60.0 : nominalSpeedKph;
+      roadCircuity = roadCircuity == null ? 1.30 : roadCircuity;
       cacheSize = cacheSize == null ? 4_096 : cacheSize;
     }
   }

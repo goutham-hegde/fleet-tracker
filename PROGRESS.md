@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-03 · **Current position:** M3 complete, session S11 of 24
+**Last updated:** 2026-09-04 · **Current position:** M3 complete, session S11 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -1126,6 +1126,43 @@ honestly demonstrate is convergence and stability, which is what the exit criter
 - `scheduledArrival` is still not populated on arrivals, so lateness cannot be judged — the same
   gap S10 left, and M4's SLA rules need it closed.
 - A geofence is still a circle around a point, and nothing is containerized.
+
+---
+
+## Lane catalogue moved to India · 2026-09-04
+
+Not a numbered session — a change of setting applied across everything the four lanes touch. The
+simulated fleet previously ran US corridors (Chicago→Dallas, Los Angeles→Denver, Atlanta→Columbus,
+Houston→Laredo). It now runs four Indian ones, and the session logs above are left as they were
+written: they describe what was actually built at the time.
+
+| Lane | Shape | Why this one |
+|---|---|---|
+| Delhi→Mumbai via Jaipur and Ahmedabad (NH-48) | ~1,200 km, four stops, large yards | Long legs, so ETA drift over many hours has room to show |
+| Hyderabad→Bengaluru via Kurnool | Refrigerated, kerbside hospital docks | Genome Valley is a real bulk-drug cluster; the reefer feed and M4 cold-chain rules are graded here |
+| Bengaluru→Chennai via Hosur, Vellore, Sriperumbudur | Five stops, short hops | A truck here is parked most of the day — the pattern that breaks naive geofencing |
+| Nhava Sheva→Pune via Panvel | Port drayage shuttle, two-hour customs dwell | Short and repeatable, for throughput numbers without waiting out a day-and-a-half route |
+
+**What changed.** The lane definitions, the vehicle makes the telematics feed reports (Tata,
+Mahindra, Ashok Leyland, BharatBenz, Eicher), the EDI country and state codes (`MS1*HYDERABAD*TG*IN`
+rather than `MS1*HOUSTON*TX*US`), every committed fixture under `docs/samples/`, and the hand-written
+payloads in the test suites of all three modules.
+
+**What deliberately did not change.** The geodesic tests still measure Chicago→Dallas and Los
+Angeles→New York, because they check the haversine and destination formulas against *independently
+published* great-circle distances. Replacing those with Indian city pairs would mean deriving the
+expected answer from the formula under test, which is circular and would quietly remove the only
+external check the maths has.
+
+**The trap this exposed.** Half the failures were not coordinates at all but `String.replace` calls
+in tests keyed on a literal that had moved — `replace("\"hdg\":330", …)` silently became a no-op
+once the fixture heading changed, so the test asserted against an unmodified payload and failed for
+a reason that named nothing relevant. A find-and-replace across a fleet of fixtures has to account
+for the code that edits those fixtures at runtime.
+
+`docs/samples/README.md` quotes literal lines from the committed captures, so its examples were
+re-derived from the regenerated files rather than edited from memory, and checked byte-for-byte
+against them.
 
 ---
 

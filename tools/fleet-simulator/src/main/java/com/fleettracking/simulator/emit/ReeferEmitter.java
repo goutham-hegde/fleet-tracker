@@ -21,7 +21,7 @@ import java.util.stream.Collectors;
  *       be geofenced. It is the reason {@link com.fleettracking.events.StatusEvent} has to tolerate
  *       an event with neither coordinates nor a place name.
  *   <li><b>No shipment, and no vehicle either.</b> The only identity on the wire is a device id.
- *       Turning that into "the pharma load currently running Los Angeles to Denver" needs two hops
+ *       Turning that into "the pharma load currently running Hyderabad to Bengaluru" needs two hops
  *       through reference data — device to trailer to load — which is the whole of S8. A reading
  *       whose device cannot be resolved has no Kafka key and goes to the dead-letter topic.
  *   <li><b>A setpoint alongside the measurement.</b> Both numbers travel together because neither

@@ -60,8 +60,8 @@ public final class Fixtures {
   /**
    * Reference data matching the simulator's default eight-truck fleet.
    *
-   * <p>The simulator deals trucks onto its four lanes in turn, so truck 1 runs the Chicago lane,
-   * truck 2 the Los Angeles cold-chain lane, and so on. Each truck carries a telematics unit
+   * <p>The simulator deals trucks onto its four lanes in turn, so truck 1 runs the Delhi-Mumbai
+   * lane, truck 2 the Hyderabad cold-chain lane, and so on. Each truck carries a telematics unit
    * numbered {@code TLM-} and, on the reefer lanes, a probe numbered {@code DEV-} — the same truck
    * under two identifiers that share nothing, which is the whole reason identity resolution exists.
    */
@@ -74,13 +74,13 @@ public final class Fixtures {
    *
    * <p>All eight are open-ended and start well before the committed fixtures were captured. That is
    * not laziness about the temporal dimension — it is what makes these assignments usable by tests
-   * whose payloads are stamped {@code 2026-08-31}. A window starting "now" would make every
+   * whose payloads are stamped {@code 2026-09-03}. A window starting "now" would make every
    * fixture resolve to nothing, and the failure would look like a broken normalizer rather than
    * like reference data that had not been backdated. Tests that are specifically about validity
    * windows build their own assignments.
    */
   public static List<Assignment> defaultFleetAssignments() {
-    String[] lanes = {"CHI", "LAX", "ATL", "HOU"};
+    String[] lanes = {"DEL", "HYD", "BLR", "BOM"};
     List<Assignment> assignments = new ArrayList<>();
     for (int number = 1; number <= 8; number++) {
       String suffix = "%04d".formatted(number);

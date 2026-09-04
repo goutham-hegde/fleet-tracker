@@ -124,7 +124,7 @@ public final class LaneExport {
   /**
    * One lane.
    *
-   * @param code the three letters that appear in a shipment id on this lane, e.g. {@code CHI}
+   * @param code the three letters that appear in a shipment id on this lane, e.g. {@code DEL}
    */
   public record Lane(String code, String routeId, String name, List<ExportedStop> stops) {}
 
