@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MediVault cold-chain consignment",
+  "description": "Temperature-controlled pharmaceutical freight out of Genome Valley. The custody chain and the permitted temperature band are the load-bearing fields: a breach here destroys the consignment rather than delaying it.",
+  "type": "object",
+  "required": ["drugLicenceNo", "temperature", "consignment", "custody"],
+  "additionalProperties": false,
+  "properties": {
+    "drugLicenceNo": {
+      "type": "string",
+      "description": "State drug controller licence, e.g. TG/28/2019",
+      "pattern": "^[A-Z]{2}/[0-9]{2}/[0-9]{4}$"
+    },
+    "temperature": {
+      "type": "object",
+      "required": ["minC", "maxC"],
+      "additionalProperties": false,
+      "properties": {
+        "minC": { "type": "number", "minimum": -30, "maximum": 25 },
+        "maxC": { "type": "number", "minimum": -30, "maximum": 25 },
+        "excursionToleranceMinutes": {
+          "type": "integer",
+          "description": "How long the load may sit outside the band before the consignment is written off",
+          "minimum": 0,
+          "maximum": 120
+        }
+      }
+    },
+    "consignment": {
+      "type": "object",
+      "required": ["batchNo", "expiryDate", "units"],
+      "additionalProperties": false,
+      "properties": {
+        "batchNo": { "type": "string", "minLength": 4, "maxLength": 24 },
+        "expiryDate": { "type": "string", "format": "date" },
+        "units": { "type": "integer", "minimum": 1 },
+        "controlledSubstance": { "type": "boolean" },
+        "productName": { "type": "string" }
+      }
+    },
+    "custody": {
+      "type": "array",
+      "description": "Who has held the consignment, in order. At least the origin pharmacy.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["party", "handedOverAt"],
+        "additionalProperties": false,
+        "properties": {
+          "party": { "type": "string" },
+          "handedOverAt": { "type": "string", "format": "date-time" },
+          "signature": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-04 · **Current position:** M3 complete, session S11 of 24
+**Last updated:** 2026-09-04 · **Current position:** M4 in progress, session S12 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -11,13 +11,13 @@ M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
 M3 ██████████  3/3              complete
-M4 ░░░░░░░░░░  0/2              ← next
+M4 █████░░░░░  1/2              ← in progress
 M5 ░░░░░░░░░░  0/3
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               11/24 sessions
+               12/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -113,13 +113,13 @@ one — the three things every later milestone is a consumer of.
 **Capability:** polymorphic manifests and SLA exception detection — where the "why MongoDB"
 argument becomes demonstrable rather than asserted.
 
-- [ ] **S12** — Polymorphic manifests + per-customer JSON Schema validation
+- [x] **S12** — Polymorphic manifests + per-customer JSON Schema validation ✅
 - [ ] **S13** — Five SLA rules with raise/clear semantics
 
 **Exit criteria**
 
-- [ ] All four manifest shapes persist and query correctly from one collection
-- [ ] A manifest violating its customer's schema is rejected with a useful error
+- [x] All four manifest shapes persist and query correctly from one collection
+- [x] A manifest violating its customer's schema is rejected with a useful error
 - [ ] Each injected fault raises exactly the expected exception
 - [ ] Exceptions **clear** when the condition resolves — not just raise
 
@@ -1166,13 +1166,110 @@ against them.
 
 ---
 
+## S12 — Polymorphic manifests · 2026-09-04 · M4
+
+The session where "why MongoDB" stops being a paragraph in the README and becomes something you
+can run. Four freight modes whose paperwork shares almost no fields now live in one collection,
+each held to its own customer's JSON Schema on write.
+
+**Built:** `services/shipment-service`, the fourth service. A manifest is a typed envelope
+(`shipmentId`, `customerId`, `mode`, `schemaVersion`, `createdAt`) around an untyped `body`. The
+four contracts are committed as JSON Schema under `docs/schemas/manifests/` and loaded by
+`scripts/seed-manifest-schemas.sh`. Validation is `com.networknt:json-schema-validator` 3.0.7.
+HTTP on 18082: `POST /manifests`, `GET /manifests/{shipmentId}`, `GET /manifests?customerId=|mode=`.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| How polymorphic the manifest is in Java | Typed envelope, untyped body | A sealed interface with four record subtypes. It would give compile-time safety on every field and would also mean a fifth customer needs a Java change and a redeploy - which contradicts the claim the milestone exists to prove. The envelope is typed precisely because this service *reads* those fields; the body it only stores and returns |
+| What keys a schema | Customer **and** freight mode | One schema per customer. A pharma distributor that also sends samples by parcel has two genuinely different manifests, and a single schema would have to be the union of both, which validates neither |
+| Where validation lives | Application-side per customer, plus a MongoDB `$jsonSchema` on the envelope | App-side only. A collection carries exactly one validator and there is one schema per customer, so the per-customer half *cannot* be server-side - but the envelope half can be, and it is the only constraint that survives a migration script or a `mongosh` prompt |
+| Response code for a schema violation | `422`, with the violations | `400`. The request was understood perfectly and its contents were unacceptable; an order system automating against this needs to tell "our serializer is broken" from "we sent a temperature above the maximum" |
+| Response code when no schema is on file | `503` | `422`. Follows the gateway's existing rule that `503` is for cases where the identical request can succeed later. Nothing is wrong with the manifest - the platform has not been given the contract, and blaming the caller would send them to fix a correct document |
+| Whether to cache schemas | No | A refreshed snapshot. Same reasoning as `MongoIdentityResolver`: this is reference data somebody else maintains, and a cache buys one indexed lookup at the price of a window in which the service accepts a manifest the current contract forbids. A manifest is written once per shipment, not thirty times a minute per truck |
+| Request body binding | A typed record | The gateway binds bodies as `String` so malformed messages still reach the dead-letter topic. There is no DLQ here because there is a synchronous caller who can be told what is wrong and resend, so copying that rule would have been cargo cult |
+
+### What surprised me
+
+**The library API was nothing like the one in my head.** networknt 3.x renames almost everything:
+`JsonSchemaFactory` is `SchemaRegistry`, `JsonSchema` is `Schema`, `ValidationMessage` is `Error`.
+Checking the jar with `javap` before writing against it also confirmed the thing that actually
+mattered - the 3.x line depends on `tools.jackson.core`, so it is on the correct side of this
+repository's Jackson 2/3 split. The 2.x line of the same library is built against Jackson 2, whose
+annotations are identical and whose configuration a Jackson 3 mapper silently ignores.
+
+**A build defect that had nothing to do with this session.** Two `GET` endpoints returned `500`:
+
+```
+Name for argument of type [java.lang.String] not specified, and parameter
+name information not available via reflection. Ensure that the compiler
+uses the '-parameters' flag.
+```
+
+Spring resolves `@PathVariable` and `@RequestParam` **by parameter name**, and `javac` discards
+those names unless told to keep them. `spring-boot-starter-parent` sets that flag - and this build
+**imports the BOM instead of inheriting the parent**, so it gets versions and none of the parent's
+plugin configuration. That is the identical gap already documented for the `repackage` goal,
+surfacing a second time in a completely different disguise. Fixed once in the root POM rather than
+by naming the variable in one controller, since every future endpoint has the same exposure.
+
+It then bit twice: with the flag added the tests still failed, because Maven's incremental compiler
+saw unchanged sources and skipped recompiling. `javap` showed no `MethodParameters` in the class
+file. **A compiler-flag change needs a clean build to take effect** - the flag is not part of the
+staleness check.
+
+**`additionalProperties: false` is what stops "schemaless" meaning "junk drawer".** Without it a
+typo'd field name is stored silently and read by nobody. With it, `servicelevel` beside
+`serviceLevel` is a rejection naming both. The openness of the body is bounded by a contract that
+lives as data, not by the absence of a contract.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `./mvnw clean verify` | All six modules green; 21 unit + 14 integration tests in the new module |
+| `./scripts/seed-manifest-schemas.sh` | 4 schemas loaded; a second run leaves 4, not 8 |
+| Four shapes submitted to the running service | `201` each, against the real Kind cluster |
+| One collection holds all four | 4 documents, and no two share a single body field |
+| Query an untyped body field | `body.freightClass`, `body.recipient.pincode`, `body.pallets > 20` and `body.temperature.maxC <= 8` all select correctly |
+| Schema violation | `422` with `{"field":"/temperature/maxC","message":"must have a maximum value of 25","constraint":"maximum"}` |
+| Unknown customer | `503`, naming the customer and saying it is a platform gap |
+| Rogue write bypassing the service | MongoDB refused it: `Document failed validation` |
+| Startup destination guard | Logged `database 'fleet' on [localhost:37017]` - not the unrelated `mongod` on 27017 |
+
+### Left open
+
+- **Nothing links a manifest to a shipment's movement yet.** The two halves of the platform sit
+  side by side; joining them is what makes S13's SLA rules possible and M5's detail panel useful.
+- **No manifest is produced by the simulator.** The four shapes were submitted by hand for this
+  session's verification. S13 needs them generated per shipment, or the SLA rules have nothing to
+  run against at volume.
+- `schemaVersion` is recorded but nothing yet *uses* it - there is no path that reads a manifest
+  accepted under an older contract and treats it differently.
+- Schema changes are not versioned in the collection: seeding a new version overwrites the old one,
+  so a stored `schemaVersion` may name a document that no longer exists.
+- Still nothing containerized.
+
+---
+
 ## Next up
 
-**S12 — Polymorphic manifests**, the first session of M4 and the point where the "why MongoDB"
-argument stops being asserted and becomes demonstrable. Four freight modes — pharma cold-chain,
-retail DC replenishment, LTL and parcel — share almost no manifest fields, and all four must live in
-one collection, be queryable, and be validated per customer on write.
+**S13 — SLA rules with raise and clear semantics**, the second session of M4 and the one that
+closes the milestone. Five rules, each watching the derived stream and the manifests S12 now
+stores, and each able to **clear** as well as raise — an exception that only ever fires is an
+alarm nobody can act on.
 
-M3 leaves behind: the stored estimate's `remainingKm` going stale between publishes; no destination
-ETA, which needs the planned dwell times the lane catalogue already carries; no `scheduledArrival`
-on arrivals, which M4's SLA rules will need; circular geofences only; and nothing containerized.
+The manifest is what makes a rule specific rather than generic: a cold-chain consignment carries
+the temperature band it must stay inside, a DC replenishment carries the window it must not arrive
+before, and both of those live in the untyped body a rule now has to read. Joining a manifest to a
+shipment's movement is the first work of the session, because nothing does it yet.
+
+S12 leaves behind: no manifest produced by the simulator, so the four shapes exist only where a
+test or a person put them; `schemaVersion` recorded but never read; and schema documents
+overwritten rather than versioned, so a stored version may name a document that no longer exists.
+
+M3 still leaves behind: the stored estimate's `remainingKm` going stale between publishes; no
+destination ETA, which needs the planned dwell times the lane catalogue already carries; no
+`scheduledArrival` on arrivals, which M4's SLA rules will need; circular geofences only; and
+nothing containerized.

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VistaMart DC replenishment",
+  "description": "Retail distribution-centre replenishment down NH-48. Note that a delivery window has both ends: arriving early is a violation at a DC with booked dock slots, which is true of almost no other freight this platform carries.",
+  "type": "object",
+  "required": ["dcCode", "purchaseOrders", "deliveryWindow", "pallets"],
+  "additionalProperties": false,
+  "properties": {
+    "dcCode": {
+      "type": "string",
+      "description": "Receiving distribution centre",
+      "pattern": "^DC-[A-Z]{3}-[0-9]{2}$"
+    },
+    "asnNumber": {
+      "type": "string",
+      "description": "Advance shipping notice, sent ahead of the truck"
+    },
+    "purchaseOrders": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "required": ["poNumber", "lineCount", "valueInr"],
+        "additionalProperties": false,
+        "properties": {
+          "poNumber": { "type": "string", "pattern": "^PO[0-9]{8}$" },
+          "lineCount": { "type": "integer", "minimum": 1 },
+          "valueInr": { "type": "number", "minimum": 0 },
+          "department": { "type": "string" }
+        }
+      }
+    },
+    "deliveryWindow": {
+      "type": "object",
+      "required": ["opensAt", "closesAt"],
+      "additionalProperties": false,
+      "properties": {
+        "opensAt": { "type": "string", "format": "date-time" },
+        "closesAt": { "type": "string", "format": "date-time" },
+        "dockNumber": { "type": "integer", "minimum": 1, "maximum": 120 }
+      }
+    },
+    "pallets": {
+      "type": "integer",
+      "description": "Whole pallets. A part pallet is counted as one.",
+      "minimum": 1,
+      "maximum": 52
+    },
+    "temperatureControlled": { "type": "boolean" }
+  }
+}

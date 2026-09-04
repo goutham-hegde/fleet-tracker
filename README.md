@@ -36,6 +36,7 @@ dashboard/      React + MapLibre live map
 deploy/         kustomize manifests + ArgoCD applications
 infra/          Terraform for the AWS free-tier pieces
 docs/adr/       architecture decision records
+docs/schemas/   per-customer manifest JSON Schemas, loaded by a seed script
 ```
 
 ## Build
@@ -69,6 +70,8 @@ by accident:
 | Service | Host address |
 |---|---|
 | Dashboard | `http://localhost:18080` |
+| Ingest gateway | `http://localhost:18081` |
+| Shipment service | `http://localhost:18082` |
 | Kafka | `localhost:19092` |
 | MongoDB (cluster) | `mongodb://localhost:37017` |
 
@@ -301,6 +304,79 @@ java -jar services/tracking-processor/target/tracking-processor-0.1.0-SNAPSHOT.j
 java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar   --fleet.simulator.emit.http.enabled=true --fleet.simulator.time-scale=300   --fleet.simulator.tick-interval=200ms --fleet.simulator.trucks=4 --fleet.simulator.repeat-routes=false
 
 ./scripts/kafka-cli.sh kafka-console-consumer.sh --bootstrap-server localhost:19092   --topic shipment.derived.v1 --from-beginning
+```
+
+## Shipment service
+
+Everything above is about where a truck is. This is about what is in it.
+
+A **manifest** is the paperwork for a load, and its shape is a function of the freight. A pharma
+cold-chain consignment carries a custody chain, a batch number and the temperature band it must
+stay inside. A retail replenishment carries purchase orders, a pallet count and a booked delivery
+window that it must not arrive *before*. A part-load carries a GST e-way bill and a freight class.
+A parcel carries a tracking number, a service level and a PIN code. Between the four of them there
+is not one shared field.
+
+All four live in **one MongoDB collection**. A manifest is a small typed envelope — shipment,
+customer, freight mode, schema version, timestamp — wrapped around a body this service never
+interprets:
+
+```bash
+./scripts/seed-manifest-schemas.sh          # load the four customer contracts
+./mvnw -pl services/shipment-service -am package
+java -jar services/shipment-service/target/shipment-service-0.1.0-SNAPSHOT.jar
+
+curl -X POST localhost:18082/manifests -H "Content-Type: application/json" -d '{
+  "shipmentId": "SHP-BOM-0004",
+  "customerId": "QUICKSHIP",
+  "mode": "PARCEL",
+  "body": {
+    "trackingNumber": "QS4471028893IN",
+    "serviceLevel": "NEXT_DAY",
+    "weightKg": 1.85,
+    "recipient": { "name": "A. Krishnan", "pincode": "600028" }
+  }
+}'
+```
+
+The body is open, but it is not unchecked. Every customer has a **JSON Schema** on file, kept in
+`docs/schemas/manifests/` and loaded into the database rather than compiled into the service, and
+every write is held to it:
+
+```json
+{
+  "reason": "The manifest does not satisfy the schema on file for this customer",
+  "schemaVersion": "2026-09-04",
+  "violations": [
+    { "field": "/temperature/maxC", "message": "must have a maximum value of 25", "constraint": "maximum" }
+  ]
+}
+```
+
+That distinction is the reason this data is in MongoDB rather than in a relational table.
+Flattened, the four shapes are roughly forty mostly-null columns; normalised into an
+attribute-value table they lose their types and need a join per field. Kept as documents they stay
+queryable — including on fields the service was never told about:
+
+```javascript
+db.manifests.find({ "body.freightClass": "85" })
+db.manifests.find({ "body.recipient.pincode": "600028" })
+db.manifests.find({ "body.temperature.maxC": { $lte: 8 } })
+```
+
+And because the schemas are data, onboarding a customer or accepting a new field from an existing
+one is an insert, not a release. What prevents that openness from becoming a junk drawer is that
+every schema sets `additionalProperties: false`: a manifest carrying `servicelevel` next to
+`serviceLevel` is rejected, naming both.
+
+Two layers do the checking, because neither can do the other's job. The per-customer schema is
+applied by the service, which is the only place that knows which customer sent what. The shared
+envelope is enforced by MongoDB itself, which is the only thing still watching when a migration
+script or a `mongosh` prompt writes to the collection directly:
+
+```
+> db.manifests.insertOne({ _id: "SHP-ROGUE", mode: "TELEPORTATION", ... })
+MongoServerError: Document failed validation
 ```
 
 ## Prerequisites

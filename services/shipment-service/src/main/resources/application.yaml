@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: shipment-service
+
+  # spring.mongodb, NOT spring.data.mongodb. Spring Boot 4 moved the connection properties out of
+  # Spring Data's namespace and deprecated the old names at level "error", which means they are no
+  # longer bound -- silently, leaving the default mongodb://localhost/test in place. On this
+  # machine an unrelated mongod answers on that default, so the mistake does not even fail.
+  mongodb:
+    # 37017 on the host, not 27017: an unrelated mongod owns the default port on this machine.
+    # Inside the cluster this is overridden to mongodb://mongodb.fleet.svc.cluster.local:27017.
+    uri: mongodb://localhost:37017
+    database: fleet
+
+server:
+  # 18082. 18080 is the dashboard and 18081 the ingest gateway; 8080 is already bound on this
+  # machine by something unrelated to this project.
+  port: 18082
+
+  error:
+    # A rejected manifest must say what was wrong with it, so the response body carries the
+    # validation detail this service produced rather than a bare status code.
+    include-message: always
+
+fleet:
+  shipment:
+    # Schemas are read on every write rather than cached. The reasoning matches
+    # MongoIdentityResolver in the gateway: this is reference data somebody else maintains, and a
+    # cache buys one indexed lookup at the price of a window in which the service validates
+    # against a schema the customer has already replaced. Accepting a manifest that the current
+    # schema forbids is the exact failure this validation exists to prevent, and a write is far
+    # rarer than a position fix -- there is no throughput argument for caching it here.
+    cache-schemas: false
+
+logging:
+  level:
+    com.fleettracking: INFO

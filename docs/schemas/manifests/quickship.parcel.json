@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QuickShip parcel",
+  "description": "One small box. Included precisely because it is the shape that makes a shared column set look absurd: it has four required fields and shares none of them with a pharma consignment.",
+  "type": "object",
+  "required": ["trackingNumber", "serviceLevel", "weightKg", "recipient"],
+  "additionalProperties": false,
+  "properties": {
+    "trackingNumber": {
+      "type": "string",
+      "pattern": "^QS[0-9]{10}IN$"
+    },
+    "serviceLevel": {
+      "type": "string",
+      "enum": ["SAME_DAY", "NEXT_DAY", "STANDARD", "ECONOMY"]
+    },
+    "weightKg": {
+      "type": "number",
+      "description": "Parcel ceiling; anything heavier goes as part-truckload instead",
+      "exclusiveMinimum": 0,
+      "maximum": 32
+    },
+    "recipient": {
+      "type": "object",
+      "required": ["name", "pincode"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 2 },
+        "pincode": { "type": "string", "pattern": "^[1-9][0-9]{5}$" },
+        "phone": { "type": "string", "pattern": "^[6-9][0-9]{9}$" }
+      }
+    },
+    "signatureRequired": { "type": "boolean" },
+    "declaredValueInr": { "type": "number", "minimum": 0, "maximum": 50000 },
+    "codAmountInr": {
+      "type": "number",
+      "description": "Cash collected on delivery. Zero for a prepaid parcel.",
+      "minimum": 0,
+      "maximum": 50000
+    }
+  }
+}
