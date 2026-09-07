@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-04 · **Current position:** M4 in progress, session S12 of 24
+**Last updated:** 2026-09-07 · **Current position:** M4 complete, session S13 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -11,13 +11,13 @@ M0 ██████████  3/3 sessions    complete
 M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
 M3 ██████████  3/3              complete
-M4 █████░░░░░  1/2              ← in progress
-M5 ░░░░░░░░░░  0/3
+M4 ██████████  2/2              complete
+M5 ░░░░░░░░░░  0/3              ← next
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               12/24 sessions
+               13/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -114,14 +114,16 @@ one — the three things every later milestone is a consumer of.
 argument becomes demonstrable rather than asserted.
 
 - [x] **S12** — Polymorphic manifests + per-customer JSON Schema validation ✅
-- [ ] **S13** — Five SLA rules with raise/clear semantics
+- [x] **S13** — Five SLA rules with raise/clear semantics ✅
 
 **Exit criteria**
 
 - [x] All four manifest shapes persist and query correctly from one collection
 - [x] A manifest violating its customer's schema is rejected with a useful error
-- [ ] Each injected fault raises exactly the expected exception
-- [ ] Exceptions **clear** when the condition resolves — not just raise
+- [x] Each injected fault raises exactly the expected exception
+- [x] Exceptions **clear** when the condition resolves — not just raise
+
+**All four criteria pass as of 2026-09-07, against the live Kind cluster. M5 is unblocked.**
 
 ---
 
@@ -1253,23 +1255,183 @@ lives as data, not by the absence of a contract.
 
 ---
 
+## S13 — Five rules that raise and clear · 2026-09-07 · M4
+
+The session where the platform stops describing freight and starts judging it. Everything before
+this answers "what happened"; the exception service answers "is that acceptable" — a question only
+a customer's contract can settle, which is why it had to come after the manifests.
+
+**Built:** `services/exception-service`, the fifth service and the fourth Kafka consumer. Three
+listeners (positions, statuses, derived events) and a timer, in consumer group `exception-service`,
+with no HTTP port. Five rules in `rule/`, incidents in `incident/`, and the reserved-path reader in
+`manifest/`. Two supporting pieces: `libs/reference`, a new module holding the itinerary and
+distance code that used to live inside the tracking processor, and **operational disruptions** in
+the simulator (`fault/Disruption`, profile `disrupted`), which break the truck rather than the
+message. Plus `scripts/seed-manifests.sh` and a sixth topic, `exceptions.dlq.v1`. Both existing seed
+scripts also gained a cleanup step, after a stale-reference-data bug found mid-session that had
+been silently discarding two of the four feeds — see below.
+
+The five rules were chosen because each needs a different shape of evidence, so together they
+exercise the whole pipeline instead of testing one mechanism five times:
+
+| Rule | Fires on | Needs |
+|---|---|---|
+| `TEMPERATURE_EXCURSION` | a reefer reading | the customer's band, out of the manifest body |
+| `UNPLANNED_STOP` | a position | the itinerary, to know where stopping is legitimate |
+| `ROUTE_DEVIATION` | a position | the planned path as geometry |
+| `LATE_ARRIVAL` | an ETA, then an arrival | a *prediction* — it fires before anything is wrong |
+| `SIGNAL_LOSS` | **nothing** | a timer, because no message will ever arrive to trigger it |
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| How a rule reads a customer's commitment out of an untyped manifest body | Reserved paths (`temperature`, `deliveryWindow`), enforced at build time by a test that reads the committed schemas | A seeded table mapping customer and mode to a JSON path - fully general, and a second contract per customer that drifts from the first, with a *silent* failure: the rule finds nothing at the stale path and reports a healthy shipment for ever. Also rejected: an extractor class per customer, which makes onboarding a code change and a deploy - exactly the cost S12 existed to remove |
+| How to detect the absence of events | A timer, and **two clocks** - an event-time watermark for "how much of the shipment's day has passed with no news", plus a wall-clock catch-up grace for "have I actually had a chance to hear from it" | Either clock alone, and the failure modes are opposite. Event time alone floods on startup: a service replaying a retained topic races its watermark to the newest record and every shipment behind it looks silent. Wall-clock alone never fires under a time-scaled run, since four simulated hours pass in under a minute |
+| What names an incident | A name-based UUID over type, shipment, stop and **the instant the condition began** | A fresh id per firing, which turns one late truck into forty alerts. Deriving from the onset also means state read back after a restart regenerates the same id, so a clear published by one process still pairs with a raise published by another |
+| Order of publishing and recording | Publish, then record | Record first. Same reasoning as S10's geofencing: there is no transaction across Kafka and MongoDB, recording first can lose an incident permanently and silently, and publishing first can only repeat one - byte-identically, because the ids are derived |
+| Whether rule state may be cached | Yes | The three existing stores all refuse a cache, and the distinction is ownership rather than speed. Those read reference data somebody else maintains, where a cache buys a lookup and pays with a stale plan. This is the consumer's own working state, written by the single process holding the shipment's partition, with nobody to be stale with respect to |
+| How often that state is written | On transition only - the condition began, ended, or became an incident | Per event, which adds a write per rule per position to protect a value that changes only at a transition. The cost of the choice is precise and small: a restart loses how far a still-developing condition had got, so confirmation takes up to one further tolerance period. The onset itself is durable, because that is the transition that gets written |
+| How sustained rules measure duration | Elapsed event time | A count of consecutive bad fixes, which would mean two different things for a telematics unit reporting every ten seconds and a phone reporting every two minutes. The same trap the ETA smoothing avoids with a half-life |
+| Where the itinerary lives now that two consumers need it | A new `libs/reference` module | Duplicating the code (two definitions of the plan, drifting), or making the exception service depend on the tracking processor (a service depending on another service's internals to read a shared plan) |
+| How to inject faults that SLA rules can detect | A new kind of fault entirely, in the movement core | Extending the existing fault types. Those break the *wire* - dropped, duplicated, corrupted messages - and no amount of transport chaos produces a stationary truck. The test is one question: would a perfect network still show this? |
+| Whether the new service shares `tracking.dlq.v1` | Its own `exceptions.dlq.v1` | Sharing. A narrower version of the same argument that split the tracking DLQ from the gateway's: an entry there means position history was not written, one here means an SLA breach was not judged. Different severities, different people |
+| Severity | A property of the incident, decided with the shipment in hand | A constant per rule. The same breakdown is a delay for dry goods and a countdown for a reefer; the same excursion is critical when a customer stated a band and merely a warning when the platform is only comparing against the equipment's own setpoint |
+
+### What surprised me
+
+**A rule that is silent looks exactly like a rule that works.** Two of the five read the manifest,
+and until this session nothing produced manifests at scale - so both would have sat quiet through a
+whole disrupted run while appearing perfectly healthy. That is the same failure S8 found in the
+gateway, arriving through a different door: an empty reference collection is indistinguishable from
+a calm fleet. `scripts/seed-manifests.sh` exists because of it, and the service's heartbeat now
+reports what it is watching rather than only what it has raised.
+
+**Only two of the four seeded customers can breach anything, and that is correct.** Just the retail
+lane books a delivery window and just the pharma lane is refrigerated, so late arrival applies to
+one lane and temperature excursion to another. The instinct is to read that as coverage missing.
+A carrier cannot be late against a deadline nobody set, and inventing one from the itinerary would
+mean judging a carrier against a commitment no customer made.
+
+**A second live run is not simply a repeat of the first.** The simulator starts its clock at the
+real current instant and then races ahead of it, so the first run leaves position, geofence, ETA and
+rule state stamped a *simulated day in the future*. Start a second run and every event it produces
+is older than the state already stored - and the platform correctly refuses all of it, because
+refusing out-of-order fixes is a property S10 and S11 deliberately built. Nothing is broken; the
+demonstration simply cannot be replayed without clearing the derived collections first. Worth
+knowing before concluding that a re-run has proved a regression.
+
+**Two of the four feeds were being discarded in their entirety, and nothing said so.** The
+disrupted run produced far fewer events than four trucks over a simulated day should. The cause was
+in reference data, not in code: the `assignments` collection held **128** documents where it should
+hold 64 — one set for the Indian lanes, and one left behind by the US lanes they replaced in S12.
+
+The seed script is idempotent by document id, and the id derives from the *shipment*. Renaming a
+lane changes every shipment id, so re-seeding wrote a complete new set and orphaned the old one.
+Every tractor then had two assignments claiming it over the same open period.
+
+What happened next is the design working exactly as intended, which is what made it hard to see.
+S8 decided that overlapping assignments resolve to **nothing** — contradictory reference data is
+logged and the message dead-lettered, because a wrongly attributed position is worse than a missing
+one. So the gateway rejected **100% of telematics and 100% of reefer readings** (the probe reaches
+a load through its vehicle) while the two shipment-keyed feeds carried on working and the service
+reported itself perfectly healthy. It also explains why the cold-chain rule never fired: not a rule
+problem at all, but a feed that never arrived.
+
+The fix is one line of intent in each seed script — delete the rows this run no longer generates,
+scoped to the trucks it provisions. The general lesson is about idempotency: **an upsert keyed by a
+derived id is idempotent only for as long as the derivation is stable.** Change what the id is made
+of and the same script becomes an accumulator. `seed-itinerary.sh` had the identical residue,
+harmlessly, and was cleaned too.
+
+**A delivered load kept being reported silent, and the code read correctly.** The live run finished
+with three open signal-loss incidents against shipments that had all been delivered — the precise
+failure the rule's completion logic was written to prevent, and the one its own documentation calls
+the most common way an alerting system fills with noise nobody can action.
+
+Completion removed the shipment from the watch map, which is right and is not enough. Arrivals
+arrive on the derived topic and positions on the position topic, handled by different listener
+threads sitting at different offsets, so the last fixes of the final leg routinely land *after* the
+arrival that concluded the shipment. Each of those called `seen()` and put the load straight back
+under watch — and since it was delivered, nothing further would ever be reported, so half an hour of
+event time later it was announced as silent.
+
+Nothing about this is visible reading the class on its own: single-threaded, in the order the code is
+written, completion is the last thing that happens. It is only wrong once two topics are being
+consumed concurrently. The fix is a bounded set of finished shipments that `seen()` consults, and a
+test that fails without it. The watermark still advances for a straggler, because a late message is
+real evidence of how far the fleet's day has got even when the load it describes is finished.
+
+The general shape: **"remove it from the collection" is only equivalent to "it is finished" when
+nothing can put it back.** Concurrency turns an ordering that is obvious in source into one of
+several possible orderings, and the one that breaks is the one nobody wrote down.
+
+**Route deviation is by far the noisiest of the five**, and it is a consequence of having no route
+geometry rather than a bad threshold. The planned path is straight lines between stops and a real
+highway is not, so the corridor has to be wide enough that a truck driving the actual road never
+escapes it. The honest statement of what the rule detects is "went somewhere else", not "left the
+road" - and tightening the corridor without adding a routing engine would make it worse while
+looking stricter.
+
+**The late-arrival rule closes in two completely different ways, and both are the same incident.**
+An estimate that comes back inside the window clears it because the problem went away. An arrival
+past the window also closes it - but by restating it as critical with what actually happened first,
+because there is nothing left to watch rather than because anything recovered. Seeing
+`cleared LATE_ARRIVAL ... (ARRIVED_LATE)` in a live run is the prediction becoming a fact.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `./mvnw verify` | All eight modules green, exit 0 — 430 unit tests and 75 integration tests (19 gateway, 30 tracking, 14 shipment, 12 exception) |
+| Unit tests across the reactor | 430, no failures — 69 of them in the new module |
+| `ExceptionServiceIT` | 12 integration tests, all green: every rule's raise **and** clear path, plus the dead-letter and unrecognised-shape cases |
+| `ReservedPathsTest` | Reads the four committed schemas in `docs/schemas/manifests/` and confirms each SLA term sits at its reserved path |
+| New topic created | `exceptions.dlq.v1` present after re-running the `kafka-topics` Job |
+| Stale reference data found | `assignments` held **128** documents for a 64-truck fleet — 64 orphaned by S12's lane rename, giving every tractor two open assignments |
+| `scripts/seed-identity.sh` after the fix | 64 stale assignments removed, 64 remain; a second run removes nothing and reports 0 inserted, 0 updated |
+| `scripts/seed-itinerary.sh` after the fix | 64 orphaned plans removed, 64 remain covering 240 scheduled stops; idempotent on a second run |
+| Gateway dead-letters, before the fix | 100% of telematics and 100% of reefer rejected as `UNRESOLVED_IDENTITY`, while the gateway reported itself healthy |
+| Gateway dead-letters, after the fix | **zero** across a full disrupted run |
+| Live disrupted run | 4 trucks, 4 lanes, `--spring.profiles.active=disrupted` against the Kind cluster: 10,624 messages posted to the gateway (`TELEMATICS=8857, MOBILE_APP=1517, EDI_214=21, REEFER_SENSOR=229`), **0 refused, 0 unreachable, 0 dropped unsent** |
+| Tracking processor during that run | `stored=10326 duplicates=22 dlq=0`, `arrivals=15 departures=11 unplanned=0`, `etas=1820/10326 (18%)` — `unplanned=0` confirming every shipment still resolves an itinerary after the cleanup |
+| **All five rules raised, live** | one run raised all five: `TEMPERATURE_EXCURSION` 4, `ROUTE_DEVIATION` 3, `SIGNAL_LOSS` 3, `UNPLANNED_STOP` 2, `LATE_ARRIVAL` 1 — 13 raised, 10 cleared. The four condition rules all cleared; the three open signal losses turned out to be the straggler defect described above, fixed and pinned by test afterwards |
+| Signal loss, from a real blackout | Demonstrated in a separate blackout-only run once the disruption was made long enough to outlast the wall-clock grace: raised for three shipments after 89-127 minutes of silence, then `cleared ... (REPORTING_AGAIN)` after 3h05m and 4h14m when the devices returned. The two clears arrived on *different* listener threads, one from the position topic and one from the status topic — any feed counts as a sighting |
+| Exceptions reach Kafka, not only MongoDB | `exceptions.v1` carries `exception.raised` and `exception.cleared`, and the pair share one `exceptionId` — e.g. `327b7bd0-8e19-3820-9ac1-3ffaa52d68bf` for a route deviation raised at 19:36 and cleared at 20:27 with `resolution: BACK_ON_ROUTE` |
+| The manifest is what makes a rule specific | The cold-chain incident reads `31.7C is outside the agreed 2.0 to 8.0C band` and waits MediVault's own 30-minute tolerance — both out of the manifest body, neither in the service |
+| Severity decided per incident | The same excursion is `CRITICAL` with a customer band on file; an unplanned stop on the refrigerated lane reports `The load is temperature-controlled` |
+
+### Left open
+
+- **The corridor cannot tell "left the road" from "went somewhere else."** A routing engine is the
+  single clearest upgrade to this rule, and the width of the corridor is the whole of its accuracy.
+- **A reefer reading carries no position**, so the temperature rule cannot distinguish a warm box on
+  a loading dock from a failing unit on a motorway. It leans entirely on duration, and the canonical
+  status envelope would need a door state or a position to do better.
+- **The last-seen map is in memory**, so a restart reports nothing until each shipment has been seen
+  once. That is the honest behaviour - a service that has just started genuinely cannot tell a
+  broken-down truck from one it was never assigned - but it does mean silence detection has a warm-up.
+- **Nothing reads the exceptions collection yet.** M5's dashboard is the consumer that makes these
+  incidents visible to a person rather than to a log.
+- Carried over from M3: the stored `remainingKm` still goes stale between publishes, and M5 must fix
+  that before reading the field. Still nothing containerized.
+
+---
+
 ## Next up
 
-**S13 — SLA rules with raise and clear semantics**, the second session of M4 and the one that
-closes the milestone. Five rules, each watching the derived stream and the manifests S12 now
-stores, and each able to **clear** as well as raise — an exception that only ever fires is an
-alarm nobody can act on.
+**S14 — the live map**, the first session of M5 and the one that makes everything built so far
+visible to somebody who was not here. Position, geofence state, arrival estimates and now SLA
+exceptions all exist as documents and events; none of them has ever been looked at by a person.
 
-The manifest is what makes a rule specific rather than generic: a cold-chain consignment carries
-the temperature band it must stay inside, a DC replenishment carries the window it must not arrive
-before, and both of those live in the untyped body a rule now has to read. Joining a manifest to a
-shipment's movement is the first work of the session, because nothing does it yet.
+Before the dashboard reads the estimate, the stale `remainingKm` has to be fixed — the field is only
+written when something is published, so a shipment five kilometres from its stop can hold a value of
+a hundred. Either publish on a slow heartbeat as well as on change, or write per fix.
 
-S12 leaves behind: no manifest produced by the simulator, so the four shapes exist only where a
-test or a person put them; `schemaVersion` recorded but never read; and schema documents
-overwritten rather than versioned, so a stored version may name a document that no longer exists.
+S13 leaves behind: an off-route rule whose tolerance is the whole of its accuracy and which needs
+route geometry to do better; a temperature rule that cannot tell a warm trailer on a loading bay
+from a failing unit on a motorway, because a reefer reading carries no position; a last-seen record
+held in memory, so silence detection warms up after a restart; and nothing yet reading the
+exceptions collection.
 
-M3 still leaves behind: the stored estimate's `remainingKm` going stale between publishes; no
-destination ETA, which needs the planned dwell times the lane catalogue already carries; no
-`scheduledArrival` on arrivals, which M4's SLA rules will need; circular geofences only; and
-nothing containerized.
+Still nothing containerized, and that is M6's problem rather than M5's.
