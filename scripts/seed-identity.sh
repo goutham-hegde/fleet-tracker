@@ -62,6 +62,28 @@ mongosh "$MONGO_URI" --quiet --eval "
   const result = db.$COLLECTION.bulkWrite(ops);
   print('  ok  ' + result.upsertedCount + ' inserted, ' + result.modifiedCount + ' updated');
 
+  // Remove assignments this script generated for these same tractors and no longer
+  // generates. Upserting by id is idempotent only while the ids stay the same, and
+  // the id is derived from the *shipment* -- so renaming a lane changes every
+  // shipment id, writes a full set of new rows, and silently orphans the old ones.
+  //
+  // That is not a tidiness problem. Both rows claim the same tractor over the same
+  // open period, which is precisely the contradiction the gateway refuses to guess
+  // at: it resolves nothing and dead-letters. The two vehicle-keyed feeds --
+  // telematics and the reefer probe, which reaches a load via its vehicle -- then
+  // fail for every message while the gateway reports itself perfectly healthy.
+  // Found in S13, left behind by S12's move onto Indian lanes.
+  //
+  // Scoped to the tractors this run provisions, so it cannot touch reference data
+  // somebody else maintains. Within that fleet, this script owns the rows.
+  const keep = ops.map(op => op.replaceOne.replacement._id);
+  const fleet = ops.map(op => op.replaceOne.replacement.vehicleId);
+  const stale = db.$COLLECTION.deleteMany({ vehicleId: { \$in: fleet }, _id: { \$nin: keep } });
+  if (stale.deletedCount > 0) {
+    print('  ok  ' + stale.deletedCount + ' stale assignment(s) removed -- these would have made every');
+    print('      vehicle-keyed lookup contradictory, dead-lettering telematics and reefer entirely');
+  }
+
   // Indexes created explicitly here, for the same reason Kafka topics are created by
   // a Job with explicit partition counts instead of by auto-creation: a collection
   // that indexes itself the first time something queries it is a collection whose

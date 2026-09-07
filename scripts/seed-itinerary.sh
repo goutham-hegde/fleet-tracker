@@ -87,6 +87,26 @@ mongosh "$MONGO_URI" --quiet --eval "
   const result = db.$COLLECTION.bulkWrite(ops);
   print('  ok  ' + result.upsertedCount + ' inserted, ' + result.modifiedCount + ' updated');
 
+  // Drop plans this script wrote for these same trucks and no longer writes. The id
+  // is the shipment id, so renaming a lane produces a complete set of new documents
+  // and leaves the previous set behind -- 64 plans for loads that no longer exist.
+  //
+  // Harmless here in a way the identical problem is not in seed-identity.sh: a plan
+  // is only ever looked up by shipment id, so a stale one is never read. It is
+  // removed anyway, because reference data that disagrees with the fleet is exactly
+  // what makes the next inconsistency hard to spot. Same lane rename in S12; found
+  // in S13 while chasing the assignment version, which did real damage.
+  //
+  // Scoped by truck number, so this run owns trucks 1..N and nothing else.
+  const keep = new Set(ops.map(op => op.replaceOne.replacement._id));
+  const ours = id => { const m = /-(\d{4})\$/.exec(id); return m && +m[1] >= 1 && +m[1] <= $FLEET_SIZE; };
+  const stale = db.$COLLECTION.find({}, { _id: 1 }).toArray()
+    .map(d => d._id).filter(id => ours(id) && !keep.has(id));
+  if (stale.length > 0) {
+    db.$COLLECTION.deleteMany({ _id: { \$in: stale } });
+    print('  ok  ' + stale.length + ' plan(s) for loads that no longer exist removed');
+  }
+
   // No index is created here, and that is deliberate rather than an omission: the
   // document id IS the shipment id, so the only lookup this collection serves is
   // already answered by the primary key every collection has.
