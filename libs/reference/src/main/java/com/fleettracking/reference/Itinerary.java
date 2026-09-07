@@ -1,4 +1,4 @@
-package com.fleettracking.tracking.itinerary;
+package com.fleettracking.reference;
 
 import java.util.List;
 import org.springframework.data.annotation.Id;

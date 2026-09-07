@@ -44,7 +44,22 @@ public record VehicleSnapshot(
     TruckPhase phase,
     String currentStopId,
     String nextStopId,
-    double temperatureCelsius) {
+    double temperatureCelsius,
+
+    /**
+     * Whether the device is currently sending anything at all.
+     *
+     * <p>False during a blackout, and every emitter skips such a truck entirely. Carried on the
+     * snapshot rather than dropped at the sink because a radio that has stopped working is a
+     * property of the device, in the same way a wrong coordinate is: what reaches the sink should
+     * be the truth about what the device sent, and during a blackout that is nothing.
+     *
+     * <p>Note that the snapshot itself is still produced. The simulation's own view of the fleet
+     * stays complete — the truck is still there, still moving, still being tracked as ground
+     * truth — and it is only the outside world that hears nothing. That is the whole point of the
+     * fault, and it is what makes it a genuine test of a rule that fires on absence.
+     */
+    boolean transmitting) {
 
   /** True while the truck is stationary at a stop. */
   public boolean isStationary() {

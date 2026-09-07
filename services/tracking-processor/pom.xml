@@ -23,6 +23,15 @@
       <version>${project.version}</version>
     </dependency>
 
+    <!-- The itinerary read model and the haversine both consumers need. It moved out of this
+         service in S13, when the exception service needed the same scheduled stops: two copies of
+         a reference-data mapping drift in exactly the way two copies of a topic name do. -->
+    <dependency>
+      <groupId>com.fleettracking</groupId>
+      <artifactId>reference</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
     <!-- starter, not starter-web: this service has no HTTP surface. It is kept alive by the
          Kafka listener container's own non-daemon thread rather than by a servlet container. -->
     <dependency>

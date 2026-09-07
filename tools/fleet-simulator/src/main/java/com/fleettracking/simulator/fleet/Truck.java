@@ -1,6 +1,7 @@
 package com.fleettracking.simulator.fleet;
 
 import com.fleettracking.events.GeoPoint;
+import com.fleettracking.simulator.fault.Disruption;
 import com.fleettracking.simulator.route.Geo;
 import com.fleettracking.simulator.route.Leg;
 import com.fleettracking.simulator.route.Route;
@@ -69,6 +70,15 @@ public final class Truck {
    */
   static final double CRAWL_SPEED_MPS = 1.0;
 
+  /**
+   * What a trailer warms toward when its refrigeration unit has failed, in Celsius.
+   *
+   * <p>A hot afternoon on an Indian highway, in an insulated box. The number matters less than the
+   * fact that it is well outside every band a customer contracts for, so a failure that lasts long
+   * enough will always breach rather than sometimes breaching depending on the set point.
+   */
+  static final double AMBIENT_CELSIUS = 32.0;
+
   private final String vehicleId;
   private final String shipmentId;
   private final String deviceId;
@@ -93,6 +103,19 @@ public final class Truck {
   private Duration dwellRemaining;
   private double speedNoiseMps;
   private double temperatureCelsius;
+
+  /**
+   * What is currently wrong with this truck, or null when nothing is.
+   *
+   * <p>Deliberately a single slot rather than a set. See {@link Disruption}: a truck that is
+   * broken down, diverted and silent at once raises three exceptions, which demonstrates that
+   * something fired rather than that the right thing did.
+   */
+  private Disruption disruption;
+
+  /** How far off its bearing a detouring truck turns, and how slowly a slowed one drives. */
+  private double detourBearingOffsetDegrees;
+  private double slowdownSpeedRatio = 1.0;
 
   /**
    * Creates a truck standing at its route's origin, already dwelling — which is to say waiting to
@@ -147,9 +170,26 @@ public final class Truck {
 
     List<TruckTransition> transitions = new ArrayList<>(2);
 
+    // Expired disruptions clear themselves at the start of the step, so recovery is part of the
+    // ordinary tick rather than something anything has to remember to do. Every disruption ends:
+    // an exception that can only ever be raised is half of what M4 is about.
+    if (disruption != null && !disruption.activeAt(now)) {
+      disruption = null;
+    }
+
     switch (phase) {
       case DWELLING -> dwell(now, delta, transitions);
-      case DRIVING -> drive(now, seconds, transitions);
+      case DRIVING -> {
+        if (isBrokenDown()) {
+          // Stopped where it stands. The truck stays in the DRIVING phase and its cursor does not
+          // move, so it resumes on the same leg toward the same stop when the breakdown ends --
+          // and, importantly for the rule watching it, it is stationary somewhere that is not a
+          // scheduled stop.
+          speedMps = 0;
+        } else {
+          drive(now, seconds, transitions);
+        }
+      }
       case COMPLETED -> {
         // Terminal. A completed truck holds its final position and reports nothing further.
       }
@@ -188,7 +228,7 @@ public final class Truck {
     double remainingRoad = remainingStraight * Route.ROAD_CIRCUITY;
 
     speedMps = nextSpeed(seconds, remainingRoad);
-    headingDegrees = leg.bearingFrom(position);
+    headingDegrees = leg.bearingFrom(position) + detourBearingOffsetDegrees;
 
     double roadStep = speedMps * seconds;
     double straightStep = roadStep / Route.ROAD_CIRCUITY;
@@ -223,7 +263,10 @@ public final class Truck {
    * still stop from, then move toward it within the acceleration and braking limits.
    */
   private double nextSpeed(double seconds, double remainingRoadMeters) {
-    double desired = profile.cruiseSpeedMps() + wanderSpeedNoise(seconds);
+    // The slowdown scales what the driver is trying to do, not what the truck is capable of, so
+    // the braking curve below still governs the approach to a stop and a slowed truck still pulls
+    // up properly rather than crawling through its dock.
+    double desired = (profile.cruiseSpeedMps() + wanderSpeedNoise(seconds)) * slowdownSpeedRatio;
 
     // v² = u² + 2as with a final speed of zero: the fastest the truck may be going and still pull
     // up in the distance left. Below this line no explicit braking logic is needed anywhere.
@@ -278,9 +321,67 @@ public final class Truck {
     double tau = 300.0;
     double reversion = Math.min(1.0, seconds / tau);
     double sigma = 0.4;
-    double offset = temperatureCelsius - setPointCelsius;
+    // A failed unit is no longer holding anything: the box reverts toward the outside air instead
+    // of toward its set point. Same walk, different target, so the load warms over tens of minutes
+    // rather than jumping -- which is what lets the excursion tolerance mean something and what
+    // lets the eventual recovery be seen to clear.
+    double target = isReeferFailed() ? AMBIENT_CELSIUS : setPointCelsius;
+    double offset = temperatureCelsius - target;
     temperatureCelsius +=
         -offset * reversion + sigma * Math.sqrt(reversion) * random.nextGaussian();
+  }
+
+  /**
+   * Starts something going wrong with this truck.
+   *
+   * <p>Called by the simulation, which owns the seeded randomness that decides when. Nothing is
+   * started while something else is already in force — see {@link Disruption} for why one at a
+   * time is the point rather than a limitation.
+   *
+   * @param slowdownSpeedRatio what fraction of cruise a slowed truck manages
+   * @param detourBearingOffsetDegrees how sharply a detouring truck turns off its line
+   */
+  public void disrupt(
+      Disruption incoming, double slowdownSpeedRatio, double detourBearingOffsetDegrees) {
+    if (disruption != null || incoming == null) {
+      return;
+    }
+    this.disruption = incoming;
+    this.slowdownSpeedRatio =
+        incoming.kind() == Disruption.Kind.SLOWDOWN ? slowdownSpeedRatio : 1.0;
+    this.detourBearingOffsetDegrees =
+        incoming.kind() == Disruption.Kind.DETOUR ? detourBearingOffsetDegrees : 0.0;
+  }
+
+  /** Whether anything is currently wrong with this truck. */
+  public boolean isDisrupted() {
+    return disruption != null;
+  }
+
+  /** What is currently wrong, or null. */
+  public Disruption disruption() {
+    return disruption;
+  }
+
+  private boolean isBrokenDown() {
+    return disruption != null && disruption.kind() == Disruption.Kind.BREAKDOWN;
+  }
+
+  private boolean isReeferFailed() {
+    return disruption != null && disruption.kind() == Disruption.Kind.REEFER_FAILURE;
+  }
+
+  /**
+   * Whether this truck's device is currently transmitting.
+   *
+   * <p>Read by the emitters, which skip a silent device entirely. Not applied at the sink, even
+   * though a dropped message is applied there, and the distinction is the same one that puts GPS
+   * noise inside the emitters: a radio that has stopped working is a property of the device, and
+   * what reaches the sink is the truth about what the device sent -- which during a blackout is
+   * nothing at all.
+   */
+  private boolean isTransmitting() {
+    return disruption == null || disruption.kind() != Disruption.Kind.BLACKOUT;
   }
 
   /** An immutable reading of everything true about this truck right now. */
@@ -306,7 +407,8 @@ public final class Truck {
         phase,
         current == null ? null : current.id(),
         next == null ? null : next.id(),
-        temperatureCelsius);
+        temperatureCelsius,
+        isTransmitting());
   }
 
   public String vehicleId() {

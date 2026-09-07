@@ -1,0 +1,128 @@
+spring:
+  application:
+    name: exception-service
+
+  main:
+    # No HTTP surface. The three Kafka listener containers supply the non-daemon threads that keep
+    # the JVM alive; both timers in ExceptionHeartbeat are deliberately daemons.
+    web-application-type: none
+
+  # spring.mongodb, NOT spring.data.mongodb. Spring Boot 4 moved these out of Spring Data's
+  # namespace and deprecated the old names at level "error", which means they bind to nothing --
+  # silently, leaving the default mongodb://localhost/test in place. On this machine that default
+  # is a real, unrelated mongod that answers every query.
+  mongodb:
+    uri: mongodb://localhost:37017
+    database: fleet
+
+  kafka:
+    bootstrap-servers: localhost:19092
+
+    consumer:
+      # Its own group, which is what lets this service read the same position topic the tracking
+      # processor reads, from the beginning, without either affecting the other's progress. Note
+      # that every @KafkaListener here sets idIsGroup = false, or Spring would override this with
+      # the listener's id and nothing would report the disagreement.
+      group-id: exception-service
+
+      # A brand new deployment backfills the retained stream rather than ignoring everything that
+      # happened before it existed. For this service that also means the signal-loss rule sees a
+      # burst of historic event times on startup, which is exactly the case its wall-clock grace
+      # period exists to survive -- see SignalLossRule.
+      auto-offset-reset: earliest
+
+      enable-auto-commit: false
+
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Strings, not a JSON deserializer. A record that fails to deserialize inside the framework
+      # never reaches the listener, so the dead-letter path that exists for exactly that record
+      # would never run.
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+      max-poll-records: 500
+
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+
+    listener:
+      concurrency: 1
+      ack-mode: batch
+
+      # Fail at startup if a topic is missing. The alternative is a service that looks healthy for
+      # ever and consumes nothing. Topics are created by the kafka-topics Job, so a missing one is
+      # a real deployment fault.
+      missing-topics-fatal: true
+
+fleet:
+  exceptions:
+    retry-backoff: 5s
+    send-timeout: 15s
+    heartbeat-interval: 30s
+
+    temperature:
+      # Applies when a customer committed to a band but not to a grace period. MediVault's schema
+      # carries excursionToleranceMinutes and that always wins -- how long their product survives
+      # out of range is their judgement, not this platform's.
+      #
+      # Twenty minutes sits above the ordinary warming of a trailer whose doors are open on a dock
+      # and below anything that would spoil a load. The simulator opens the doors during every
+      # dwell, so a shorter value would raise an exception at every delivery.
+      default-tolerance: 20m
+
+      # The fallback band for a load with no manifest: the unit's own reported setpoint, plus and
+      # minus this. Deliberately loose, and the exception it produces is a warning rather than a
+      # critical, because nobody has actually said what this freight can tolerate.
+      setpoint-tolerance-celsius: 3.0
+
+    unplanned-stop:
+      # A parked truck does not report zero -- its position wanders within the receiver's noise and
+      # the derived speed wanders with it. Below this is stopped.
+      moving-speed-kph: 5.0
+
+      # Long enough to sit above a fuel stop, a meal break and a queue at a toll plaza. Shorter and
+      # this rule reports Indian highway traffic; much longer and a breakdown goes unnoticed for
+      # most of an hour.
+      threshold: 20m
+
+      # How much wider than a stop's own geofence still counts as being at that stop. The geofence
+      # radius answers "has it arrived", and a truck queueing on the approach road to a yard has
+      # not arrived -- but it has not made an unscheduled stop either.
+      stop-margin-ratio: 2.0
+
+      # A fix reporting worse accuracy than this is not consulted at all.
+      accuracy-gate-meters: 150.0
+
+    route-deviation:
+      # Generous, and it has to be: the planned path is straight lines between stops, and a real
+      # highway is not. A tighter corridor without route geometry would raise a deviation for
+      # every truck that correctly followed the road. See Corridor.
+      corridor-km: 12.0
+
+      # The defence that actually works. A reflected signal puts a truck sideways for one fix; a
+      # diversion keeps it there for a quarter of an hour.
+      threshold: 15m
+      accuracy-gate-meters: 150.0
+
+    late-arrival:
+      # An estimate a minute past a deadline will probably drift back inside within a fix or two,
+      # and raising on it produces an exception that clears itself before anybody reads it.
+      grace: 15m
+
+    signal-loss:
+      # Measured in event time against the newest event time seen from anywhere in the fleet. The
+      # slowest feed is EDI, which is batched, so this has to sit above a batch window; the mobile
+      # app also goes quiet for stretches by design.
+      threshold: 30m
+
+      # Wall-clock, unavoidably: nothing but a timer can notice that nothing has happened. Also
+      # sets the catch-up grace, at three times this interval -- see SignalLossRule for why a
+      # second, real-time clock is what stops a startup replay reporting the whole fleet as silent.
+      sweep-interval: 10s
+
+logging:
+  level:
+    com.fleettracking: INFO

@@ -1,5 +1,6 @@
 package com.fleettracking.simulator;
 
+import com.fleettracking.simulator.fault.DisruptionScheduler;
 import java.time.Clock;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -32,15 +33,21 @@ public class SimulationRunner implements SmartLifecycle {
   private final SimulatorProperties properties;
   private final List<TickObserver> observers;
   private final Clock clock;
+  private final DisruptionScheduler disruptions;
 
   private volatile Simulation simulation;
   private ScheduledExecutorService executor;
   private volatile boolean running;
 
-  public SimulationRunner(SimulatorProperties properties, List<TickObserver> observers, Clock clock) {
+  public SimulationRunner(
+      SimulatorProperties properties,
+      List<TickObserver> observers,
+      Clock clock,
+      DisruptionScheduler disruptions) {
     this.properties = properties;
     this.observers = observers;
     this.clock = clock;
+    this.disruptions = disruptions;
   }
 
   @Override
@@ -53,7 +60,7 @@ public class SimulationRunner implements SmartLifecycle {
     if (running) {
       return;
     }
-    simulation = Simulation.from(properties, clock.instant());
+    simulation = Simulation.from(clock.instant(), properties, disruptions);
     executor =
         Executors.newSingleThreadScheduledExecutor(
             r -> {

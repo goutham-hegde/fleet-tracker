@@ -1,0 +1,53 @@
+# A fleet that things go wrong with. Every operational disruption switched on, at rates chosen so
+# that each one shows up inside a short demo run rather than once a fortnight.
+#
+#   java -jar fleet-simulator.jar --spring.profiles.active=disrupted
+#
+# This is NOT the chaos profile, and the two are deliberately separate. Chaos breaks the *wire*:
+# messages are dropped, duplicated and corrupted, and what it proves is that the gateway's
+# dead-letter routing and the consumers' de-duplication hold up. This breaks the *world*: the
+# trucks themselves break down, crawl, divert, warm up and go quiet. Every message a disrupted run
+# produces is perfectly formed and completely accurate -- it simply describes something bad.
+#
+# They can be combined (--spring.profiles.active=chaos,disrupted), and a run that has both is the
+# genuinely hard case: real problems arriving over an unreliable network. It is also the wrong
+# place to start when checking that a particular rule fires, because a disruption whose messages
+# were dropped raises nothing and looks identical to a rule that does not work.
+#
+# The rates are per truck per hour of SIMULATED time, so they mean the same thing at any
+# time-scale or tick-interval. At these settings a truck on a ten-hour lane has roughly a one in
+# three chance of breaking down at some point during it.
+fleet:
+  simulator:
+    disruptions:
+      enabled: true
+
+      # Stops dead where it stands. Raises an unplanned stop, and nothing else: the truck is still
+      # reporting and its position is accurate. Seventy-five minutes is comfortably past the
+      # exception service's twenty-minute threshold, so the fault is seen rather than missed.
+      breakdown-probability: 0.04
+      breakdown-duration: 75m
+
+      # Keeps moving, much more slowly. Raises a late arrival and nothing else -- which is why it
+      # is a separate fault rather than a milder breakdown. Long enough for the ETA's five-minute
+      # smoothing half-life to converge on the new speed and slide the estimate past a window.
+      slowdown-probability: 0.06
+      slowdown-duration: 90m
+      slowdown-speed-ratio: 0.22
+
+      # Leaves the planned line and comes back. Forty-five degrees for forty minutes at highway
+      # speed puts a truck a long way outside the twelve-kilometre corridor.
+      detour-probability: 0.05
+      detour-duration: 40m
+      detour-bearing-offset-degrees: 45
+
+      # Only ever offered to a refrigerated truck. Ninety minutes exceeds MediVault's own
+      # thirty-minute excursion tolerance, so the load genuinely breaches rather than warming and
+      # cooling inside the grace period.
+      reefer-failure-probability: 0.10
+      reefer-failure-duration: 90m
+
+      # The device stops transmitting while the truck carries on normally. An hour of silence
+      # against a thirty-minute threshold, both measured in event time.
+      blackout-probability: 0.05
+      blackout-duration: 60m

@@ -32,6 +32,7 @@ This platform normalizes all of it into one stream and one live view.
 services/       five Spring Boot services
 tools/          fleet-simulator — the synthetic data source
 libs/events/    canonical event model shared by everything
+libs/reference/ scheduled stops and distance maths, shared by two consumers
 dashboard/      React + MapLibre live map
 deploy/         kustomize manifests + ArgoCD applications
 infra/          Terraform for the AWS free-tier pieces
@@ -378,6 +379,77 @@ script or a `mongosh` prompt writes to the collection directly:
 > db.manifests.insertOne({ _id: "SHP-ROGUE", mode: "TELEPORTATION", ... })
 MongoServerError: Document failed validation
 ```
+
+## Exception service
+
+Everything above describes freight. This judges it.
+
+The service reads positions, reefer readings and the platform's own derived events, and applies
+five SLA rules. Each rule needs a different kind of evidence, which is why there are five rather
+than one mechanism repeated:
+
+| Exception | Raised when | Evidence it needs |
+|---|---|---|
+| `TEMPERATURE_EXCURSION` | a cold-chain load sits outside its agreed band for longer than the customer's tolerance | the band, read out of the manifest |
+| `UNPLANNED_STOP` | stationary away from any scheduled stop past a threshold | the itinerary, to know where stopping is legitimate |
+| `ROUTE_DEVIATION` | further from the planned path than tolerance allows, and staying there | the planned path as geometry |
+| `LATE_ARRIVAL` | the projected arrival passes the booked delivery window | an ETA — this one fires *before* anything has gone wrong |
+| `SIGNAL_LOSS` | nothing has been heard from a shipment for too long | a timer, because no message will ever arrive to trigger it |
+
+```bash
+./scripts/seed-manifests.sh    # the rules read customer commitments from manifests
+java -jar services/exception-service/target/exception-service-0.1.0-SNAPSHOT.jar
+```
+
+**Every exception clears.** An alert that can only ever fire is one that gets muted, so each rule
+detects the recovery as well as the breach, and both are published:
+
+```
+raised TEMPERATURE_EXCURSION for SHP-HYD-0002: 31.7C is outside the agreed 2.0 to 8.0C
+band, peaking at 24.3C outside it, and has been for 30 minutes
+cleared TEMPERATURE_EXCURSION for SHP-HYD-0002 after PT1H40M (RECOVERED)
+```
+
+The two messages share an **incident id**, derived from the type, the shipment, the stop and the
+instant the condition began — never from the current time and never random. That is what pairs a
+clear with its raise even when the two are published by different processes either side of a
+restart, and it is why "exactly one incident" survives a crash.
+
+**The SLA lives in the manifest, not in this service.** The temperature band above is MediVault's,
+and so is the thirty-minute tolerance — their judgement about their own product. The platform
+reserves a couple of locations inside the otherwise-untyped manifest body; a customer who wants a
+term enforced puts it there, and one who does not simply has no such field and is never judged
+against it. Of the four seeded customers only the retail lane books a delivery window and only the
+pharma lane is refrigerated, so two of the rules apply to one lane each. A carrier cannot be late
+against a deadline nobody set.
+
+Severity follows from what is known rather than from a table: the same excursion is critical when a
+customer stated a band and merely a warning when the platform is only comparing against the
+refrigeration unit's own setpoint, and the same breakdown is more serious when the trailer is
+refrigerated.
+
+**This is also where the argument for Kafka stops being theoretical.** The service reads the same
+position stream the tracking processor reads, from the beginning, in its own consumer group — and
+the tracking processor is entirely unaffected and does not know it exists. Adding a second reader
+was configuration. With a queue, it would have been a change to the first consumer.
+
+To see the rules fire, run the fleet with things going wrong with the **trucks** rather than with
+the messages:
+
+```bash
+java -jar tools/fleet-simulator/target/fleet-simulator-0.1.0-SNAPSHOT.jar \
+  --spring.profiles.active=disrupted --fleet.simulator.emit.http.enabled=true \
+  --fleet.simulator.time-scale=150 --fleet.simulator.tick-interval=200ms \
+  --fleet.simulator.trucks=4 --fleet.simulator.repeat-routes=false
+
+mongosh mongodb://localhost:37017 --quiet \
+  --eval 'db.getSiblingDB("fleet").exceptions.find().toArray()'
+```
+
+That profile breaks down trucks, slows them, sends them on detours, fails refrigeration units and
+takes devices off the air — one problem per truck at a time, each of which resolves. It is
+deliberately *not* the `chaos` profile, which damages messages instead: every message a disrupted
+run produces is perfectly formed and completely accurate, and simply describes something bad.
 
 ## Prerequisites
 

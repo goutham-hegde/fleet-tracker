@@ -1,6 +1,7 @@
 package com.fleettracking.simulator;
 
 import com.fleettracking.simulator.fleet.DriverProfile;
+import com.fleettracking.simulator.fault.DisruptionScheduler;
 import com.fleettracking.simulator.fleet.Truck;
 import com.fleettracking.simulator.fleet.TruckTransition;
 import com.fleettracking.simulator.fleet.VehicleSnapshot;
@@ -39,6 +40,16 @@ public final class Simulation {
   private final boolean repeatRoutes;
   private final Duration tickDelta;
 
+  /**
+   * Decides when a truck breaks down, slows, diverts, warms or goes quiet.
+   *
+   * <p>Here rather than inside {@link Truck} because the truck is the thing being disrupted, and
+   * because the decision needs the run's seeded randomness -- which this class owns, and which is
+   * what makes "the reefer on truck three failed forty minutes in" repeatable rather than a
+   * story about one run.
+   */
+  private final DisruptionScheduler disruptions;
+
   private Instant now;
   private long tickCount;
   private int nextVehicleNumber;
@@ -60,6 +71,24 @@ public final class Simulation {
       List<Route> lanes,
       long seed,
       boolean repeatRoutes) {
+    this(startAt, tickDelta, truckCount, lanes, seed, repeatRoutes, DisruptionScheduler.none());
+  }
+
+  /**
+   * The same, with a fleet that things can go wrong with.
+   *
+   * @param disruptions decides when a truck breaks down, slows, diverts, warms or goes quiet. Pass
+   *     {@link DisruptionScheduler#none()} for a perfectly healthy fleet
+   */
+  public Simulation(
+      Instant startAt,
+      Duration tickDelta,
+      int truckCount,
+      List<Route> lanes,
+      long seed,
+      boolean repeatRoutes,
+      DisruptionScheduler disruptions) {
+    this.disruptions = java.util.Objects.requireNonNull(disruptions, "disruptions");
     if (lanes == null || lanes.isEmpty()) {
       throw new IllegalArgumentException("a simulation needs at least one lane");
     }
@@ -119,6 +148,17 @@ public final class Simulation {
 
     for (int i = 0; i < trucks.size(); i++) {
       Truck truck = trucks.get(i);
+
+      // Rolled before the step, so a disruption that starts this tick takes effect this tick
+      // rather than a tick late. A truck that already has something wrong with it is not offered
+      // anything else -- see Disruption for why one at a time is the point.
+      if (!truck.isDisrupted()) {
+        truck.disrupt(
+            disruptions.rollFor(truck.route().id().contains("cold"), now, tickDelta),
+            disruptions.slowdownSpeedRatio(),
+            disruptions.detourBearingOffsetDegrees());
+      }
+
       Truck.TickResult result = truck.tick(now, tickDelta);
       snapshots.add(result.snapshot());
       transitions.addAll(result.transitions());
@@ -155,13 +195,20 @@ public final class Simulation {
 
   /** Builds a simulation from bound configuration, starting at the given instant. */
   public static Simulation from(SimulatorProperties properties, Instant startAt) {
+    return from(startAt, properties, DisruptionScheduler.none());
+  }
+
+  /** The same, with a scheduler deciding what goes wrong. */
+  public static Simulation from(
+      Instant startAt, SimulatorProperties properties, DisruptionScheduler disruptions) {
     return new Simulation(
         startAt,
         properties.simulatedTickDelta(),
         properties.trucks(),
         Lanes.ALL,
         properties.seed(),
-        properties.repeatRoutes());
+        properties.repeatRoutes(),
+        disruptions);
   }
 
   /**

@@ -1,9 +1,9 @@
 package com.fleettracking.tracking.geofence;
 
 import com.fleettracking.events.PositionEvent;
-import com.fleettracking.tracking.itinerary.Itinerary;
-import com.fleettracking.tracking.itinerary.ItineraryStore;
-import com.fleettracking.tracking.itinerary.ScheduledStop;
+import com.fleettracking.reference.Itinerary;
+import com.fleettracking.reference.ItineraryStore;
+import com.fleettracking.reference.ScheduledStop;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;

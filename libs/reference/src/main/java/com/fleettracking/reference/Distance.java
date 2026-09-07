@@ -1,4 +1,4 @@
-package com.fleettracking.tracking.geofence;
+package com.fleettracking.reference;
 
 import com.fleettracking.events.GeoPoint;
 

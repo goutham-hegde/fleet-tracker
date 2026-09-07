@@ -100,6 +100,11 @@ public class MobileAppEmitter implements TickObserver {
     }
 
     for (VehicleSnapshot snapshot : report.snapshots()) {
+      if (!snapshot.transmitting()) {
+        // The device has stopped transmitting. Skipped here rather than dropped at the sink,
+        // because during a blackout there is nothing for the sink to drop -- see VehicleSnapshot.
+        continue;
+      }
       if (snapshot.phase() == TruckPhase.COMPLETED) {
         continue;
       }

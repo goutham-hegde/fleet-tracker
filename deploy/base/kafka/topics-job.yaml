@@ -69,6 +69,12 @@ spec:
               # sent, which is routine, while an entry here means something
               # inside the platform produced an event that should not exist.
               create tracking.dlq.v1       3
+              # Events the exception service could not evaluate. Its own rather
+              # than shared with tracking.dlq.v1 for the narrower version of the
+              # same reason: an entry there means position history was not
+              # written, and one here means an SLA breach was not judged. Those
+              # are different severities and different people.
+              create exceptions.dlq.v1     3
 
               echo "--- topics now on the cluster ---"
               /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BS" --list

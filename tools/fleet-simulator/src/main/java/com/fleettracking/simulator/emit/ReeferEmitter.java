@@ -61,6 +61,11 @@ public class ReeferEmitter implements TickObserver {
   @Override
   public void onTick(Simulation.TickReport report) {
     for (VehicleSnapshot snapshot : report.snapshots()) {
+      if (!snapshot.transmitting()) {
+        // The device has stopped transmitting. Skipped here rather than dropped at the sink,
+        // because during a blackout there is nothing for the sink to drop -- see VehicleSnapshot.
+        continue;
+      }
       if (!hasProbe(snapshot) || snapshot.phase() == TruckPhase.COMPLETED) {
         continue;
       }

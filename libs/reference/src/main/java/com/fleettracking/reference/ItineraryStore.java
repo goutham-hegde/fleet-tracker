@@ -1,4 +1,4 @@
-package com.fleettracking.tracking.itinerary;
+package com.fleettracking.reference;
 
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -7,6 +7,21 @@ import org.springframework.data.mongodb.core.MongoOperations;
 
 /**
  * Reads a shipment's scheduled stops.
+ *
+ * <h2>Why this lives in a shared library</h2>
+ *
+ * <p>It was part of the tracking processor until S13, when the exception service needed the same
+ * scheduled stops — to know whether a stationary truck is parked somewhere it is meant to be, and
+ * how far off the planned corridor a position has strayed. The argument for moving it is the one
+ * {@code Topics} makes about topic names: a document's shape and the code that maps it are one
+ * contract, and two copies of a contract diverge silently. A field renamed in the seed script would
+ * have been fixed in one consumer and left broken in the other, with nothing failing to say so.
+ *
+ * <p>What deliberately did <em>not</em> move is the geofencer itself. This module holds the
+ * <em>reading</em> of reference data; every opinion about what a position means stays with the
+ * service that forms it. The two consumers ask the same database the same question and then
+ * disagree entirely about what to do with the answer, which is exactly the split that lets them be
+ * deployed and scaled apart.
  *
  * <h2>One lookup per position event, and no cache</h2>
  *

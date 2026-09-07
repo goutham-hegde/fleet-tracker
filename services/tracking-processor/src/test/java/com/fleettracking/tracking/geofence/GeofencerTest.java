@@ -1,12 +1,13 @@
 package com.fleettracking.tracking.geofence;
 
+import com.fleettracking.reference.Distance;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fleettracking.events.GeoPoint;
 import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.RawPayload;
 import com.fleettracking.events.SourceSystem;
-import com.fleettracking.tracking.itinerary.ScheduledStop;
+import com.fleettracking.reference.ScheduledStop;
 import java.time.Duration;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;

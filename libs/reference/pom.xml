@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.fleettracking</groupId>
+    <artifactId>fleet-tracking-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>reference</artifactId>
+  <name>reference</name>
+  <description>Shared read model for the reference data more than one consumer reads</description>
+
+  <dependencies>
+    <!-- GeoPoint, and nothing else. Reference data describes the world the events move
+         through, so it is expressed in the same coordinate type they carry. -->
+    <dependency>
+      <groupId>com.fleettracking</groupId>
+      <artifactId>events</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- Unlike libs/events, this module is not framework-free, and that is a deliberate
+         difference rather than an erosion. The envelopes are a wire contract and must be
+         readable by anything; this is a read model for documents that live in one specific
+         database, and pretending otherwise would mean every consumer writing the same
+         mapping by hand. Data, not the starter: the module supplies no auto-configuration
+         and no connection - a service brings its own spring-boot-starter-data-mongodb. -->
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-mongodb</artifactId>
+    </dependency>
+
+    <!-- Spring Data declares the MongoDB driver optional, so it does not arrive transitively:
+         the module compiled against MongoOperations and then failed on "cannot access
+         com.mongodb.client.MongoCollection". A service picks the driver up from
+         spring-boot-starter-data-mongodb; a plain library has to name it. -->
+    <dependency>
+      <groupId>org.mongodb</groupId>
+      <artifactId>mongodb-driver-sync</artifactId>
+    </dependency>
+  </dependencies>
+</project>

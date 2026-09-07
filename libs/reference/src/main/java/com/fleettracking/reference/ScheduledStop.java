@@ -1,4 +1,4 @@
-package com.fleettracking.tracking.itinerary;
+package com.fleettracking.reference;
 
 import com.fleettracking.events.GeoPoint;
 

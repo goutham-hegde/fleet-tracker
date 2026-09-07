@@ -33,7 +33,8 @@ final class Snapshots {
         TruckPhase.DRIVING,
         null,
         "amd-aslali",
-        18.4);
+        18.4,
+        true);
   }
 
   /** A refrigerated truck sitting on a hospital dock in Kurnool. */
@@ -51,7 +52,8 @@ final class Snapshots {
         TruckPhase.DWELLING,
         "knl-clinic",
         "blr-hosp",
-        4.2);
+        4.2,
+        true);
   }
 
   /** Same reefer, but the box has warmed well past its setpoint. */
@@ -60,7 +62,7 @@ final class Snapshots {
     return new VehicleSnapshot(
         base.vehicleId(), base.shipmentId(), base.deviceId(), base.routeId(), base.at(),
         base.position(), base.speedKph(), base.headingDegrees(), base.odometerKm(),
-        base.phase(), base.currentStopId(), base.nextStopId(), 9.8);
+        base.phase(), base.currentStopId(), base.nextStopId(), 9.8, true);
   }
 
   static VehicleSnapshot completed() {
@@ -68,7 +70,7 @@ final class Snapshots {
     return new VehicleSnapshot(
         base.vehicleId(), base.shipmentId(), base.deviceId(), base.routeId(), base.at(),
         base.position(), 0.0, base.headingDegrees(), base.odometerKm(),
-        TruckPhase.COMPLETED, "bom-bhiwandi", null, base.temperatureCelsius());
+        TruckPhase.COMPLETED, "bom-bhiwandi", null, base.temperatureCelsius(), true);
   }
 
   static final com.fleettracking.simulator.route.Stop PICKUP =
@@ -125,6 +127,6 @@ final class Snapshots {
     return new VehicleSnapshot(
         base.vehicleId(), base.shipmentId(), base.deviceId(), base.routeId(), when,
         base.position(), base.speedKph(), base.headingDegrees(), base.odometerKm(),
-        base.phase(), base.currentStopId(), base.nextStopId(), base.temperatureCelsius());
+        base.phase(), base.currentStopId(), base.nextStopId(), base.temperatureCelsius(), true);
   }
 }

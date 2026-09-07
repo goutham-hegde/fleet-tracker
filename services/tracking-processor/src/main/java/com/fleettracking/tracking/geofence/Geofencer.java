@@ -1,9 +1,10 @@
 package com.fleettracking.tracking.geofence;
 
+import com.fleettracking.reference.Distance;
 import com.fleettracking.events.PositionEvent;
 import com.fleettracking.events.ShipmentArrived;
 import com.fleettracking.events.ShipmentDeparted;
-import com.fleettracking.tracking.itinerary.ScheduledStop;
+import com.fleettracking.reference.ScheduledStop;
 import java.time.Duration;
 import java.time.Instant;
 

@@ -10,7 +10,7 @@ import com.fleettracking.tracking.geofence.DerivedEventPublisher;
 import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.geofence.GeofenceStateStore;
 import com.fleettracking.tracking.geofence.Geofencer;
-import com.fleettracking.tracking.itinerary.ItineraryStore;
+import com.fleettracking.reference.ItineraryStore;
 import com.fleettracking.tracking.consume.TrackingDeadLetters;
 import com.fleettracking.tracking.store.PositionStore;
 import java.time.Clock;
