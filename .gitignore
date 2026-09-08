@@ -53,6 +53,9 @@ logs/
 surefire-reports/
 failsafe-reports/
 
+# --- Local demo run state (scripts/demo.sh: pids and service logs) ---
+.demo/
+
 # --- Downloaded CLI tools (fetched by scripts/kafka-cli.sh, never committed) ---
 .tools/
 

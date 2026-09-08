@@ -1,12 +1,11 @@
 /**
  * The card that opens when a truck is clicked.
  *
- * Scope note, because the line is deliberate: this is the *summary* — where the truck is, what it
- * is doing, which stop is next and when the platform expects it there, plus anything currently
- * wrong with it. The manifest and the full incident history are rendered by S16's detail panel;
- * this card exists because a marker you cannot click is a dot, and because the reconciliations the
- * API performs (a withheld estimate, a next stop by plan order rather than by proximity) are
- * invisible unless something puts them on screen.
+ * Everything known about one shipment, in the order a person asks for it: what the truck is doing,
+ * where it is going, anything wrong with it, the plan it is working through, and finally what is
+ * actually inside it. The reconciliations the API performs — a withheld estimate, a next stop
+ * chosen by plan order rather than by proximity — are invisible unless something puts them on
+ * screen, which is most of why this card exists at all.
  *
  * The numbers here come from two places on purpose. Position, speed and open exceptions are the
  * live store, updated by the stream; the stop list and its statuses are the detail endpoint,
@@ -17,6 +16,7 @@ import type { FleetShipment } from '../fleet/FleetStore';
 import { useNow } from '../fleet/useLiveShipment';
 import type { ShipmentDetail } from '../api/types';
 import { ago, celsius, clock, duration, humanize, km, kph, pendingReason, percent, until } from './format';
+import { ManifestPanel } from './ManifestPanel';
 
 interface ShipmentCardProps {
   shipment: FleetShipment | undefined;
@@ -164,15 +164,7 @@ export function ShipmentCard({ shipment, detail, detailError, onClose }: Shipmen
         )}
       </div>
 
-      {detail?.manifest ? (
-        <p className="card-line card-muted">
-          Manifest on file: {detail.manifest.customerId}
-          {detail.manifest.mode ? ` · ${detail.manifest.mode.toLowerCase()}` : ''} — rendered in full
-          by the detail panel.
-        </p>
-      ) : detail ? (
-        <p className="card-line card-muted">No manifest filed for this load.</p>
-      ) : null}
+      <ManifestPanel manifest={detail?.manifest} loaded={detail != null || detailError != null} />
     </section>
   );
 }

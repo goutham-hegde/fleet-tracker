@@ -108,7 +108,13 @@ mongosh "$MONGO_URI" --quiet --eval "
       body: {
         dcCode: 'DC-BHW-0' + (1 + (n % 4)),
         asnNumber: 'ASN' + String(880000 + n),
-        purchaseOrders: ['PO-' + String(500000 + n), 'PO-' + String(500000 + n + 1)],
+        // Objects, not bare order numbers. VistaMart's schema requires a line count and a value
+        // per order, and the number must be PO followed by exactly eight digits -- which is why
+        // there is no hyphen in it.
+        purchaseOrders: [
+          { poNumber: 'PO' + String(50000000 + n), lineCount: 12 + (n % 40), valueInr: 180000 + (n % 23) * 45000, department: ['Grocery', 'Apparel', 'Home', 'Electronics'][n % 4] },
+          { poNumber: 'PO' + String(50000000 + n + 1), lineCount: 4 + (n % 9), valueInr: 60000 + (n % 17) * 12000 }
+        ],
         deliveryWindow: {
           opensAt: iso(hours($WINDOW_OPENS_HOURS)),
           closesAt: iso(hours($WINDOW_CLOSES_HOURS)),
@@ -126,9 +132,12 @@ mongosh "$MONGO_URI" --quiet --eval "
       body: {
         ewayBillNo: String(391000000000 + n),
         freightClass: '85',
+        // No piece count: Southern Freight's schema sets additionalProperties false and describes
+        // a piece as one physical item, so three crates are three entries rather than one with a
+        // count of three. Dimensions are what an LTL carrier actually prices on alongside weight.
         pieces: [
-          { description: 'Machined components, crated', weightKg: 210 + (n % 9) * 15, count: 3 },
-          { description: 'Spare assemblies', weightKg: 95, count: 1 }
+          { description: 'Machined components, crated', weightKg: 210 + (n % 9) * 15, dimensionsCm: { length: 120, width: 80, height: 95 }, hazmat: false },
+          { description: 'Spare assemblies', weightKg: 95, dimensionsCm: { length: 60, width: 40, height: 45 }, hazmat: false }
         ],
         billTo: { party: 'Peenya Industrial Traders', gstin: '29AABCU9603R1ZX' },
         accessorials: n % 3 === 0 ? ['LIFTGATE'] : []
@@ -140,13 +149,17 @@ mongosh "$MONGO_URI" --quiet --eval "
       customerId: 'QUICKSHIP',
       mode: 'PARCEL',
       body: {
-        trackingNumber: 'QS' + String(70000000 + n),
-        serviceLevel: n % 4 === 0 ? 'EXPRESS' : 'STANDARD',
+        // QS, ten digits, then IN. And EXPRESS is not one of QuickShip's four service levels --
+        // a plausible-looking value that its own schema has never permitted.
+        trackingNumber: 'QS' + String(7000000000 + n) + 'IN',
+        serviceLevel: n % 4 === 0 ? 'NEXT_DAY' : 'STANDARD',
         weightKg: Math.round((0.4 + (n % 11) * 0.35) * 100) / 100,
         recipient: {
           name: 'Consignee ' + n,
           pincode: '41' + String(1000 + (n % 900)).substring(0, 4),
-          phone: '+9198' + String(20000000 + n * 7)
+          // A ten-digit Indian mobile number, with no country code: the schema asks for the
+          // subscriber number and a +91 prefix is neither ten digits nor starts with 6-9.
+          phone: String(9820000000 + n * 7)
         },
         signatureRequired: n % 6 === 0,
         declaredValueInr: 1500 + (n % 20) * 450,

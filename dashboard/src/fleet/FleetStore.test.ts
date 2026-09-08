@@ -312,7 +312,81 @@ describe('exceptions', () => {
     expect(shipment?.worstSeverity).toBeUndefined();
   });
 
-  it('ignores a clear for an incident it does not hold', () => {
+  it('files a cleared incident with the raise and the clear merged', () => {
+    // The raise carries the onset, the type and the severity; the clear carries the resolution and
+    // the platform's own measure of how long the condition lasted. Only a client that saw both can
+    // say "cold chain breach, forty minutes, back in band", and the incident id is what pairs them
+    // — which is why the platform derives that id from the onset rather than minting one per
+    // firing.
+    const store = new FleetStore();
+    store.replaceSnapshot([summary()]);
+    store.apply(raised);
+
+    store.apply({
+      type: 'exception.cleared',
+      shipmentId: 'SHP-HYD-0002',
+      at: '2026-09-08T10:40:00Z',
+      payload: {
+        exceptionId: 'inc-1',
+        type: 'TEMPERATURE_EXCURSION',
+        openForSeconds: 2400,
+        resolution: 'BACK_IN_BAND',
+      },
+    });
+
+    const [resolved] = store.clearedIncidents();
+    expect(resolved.exceptionId).toBe('inc-1');
+    expect(resolved.state).toBe('CLEARED');
+    expect(resolved.severity).toBe('CRITICAL');
+    expect(resolved.onsetAt).toBe('2026-09-08T10:00:00Z');
+    expect(resolved.clearedAt).toBe('2026-09-08T10:40:00Z');
+    expect(resolved.openForSeconds).toBe(2400);
+    expect(resolved.detail).toContain('above the customer band');
+    // And it is no longer counted as a problem.
+    expect(store.openIncidents()).toHaveLength(0);
+  });
+
+  it('does not record the same resolution twice when a clear is republished', () => {
+    const store = new FleetStore();
+    store.replaceSnapshot([summary()]);
+    store.apply(raised);
+
+    const cleared: LiveUpdate = {
+      type: 'exception.cleared',
+      shipmentId: 'SHP-HYD-0002',
+      at: '2026-09-08T10:40:00Z',
+      payload: { exceptionId: 'inc-1', type: 'TEMPERATURE_EXCURSION', openForSeconds: 2400 },
+    };
+    store.apply(cleared);
+    store.apply(cleared);
+
+    expect(store.clearedIncidents()).toHaveLength(1);
+  });
+
+  it('lists open incidents across the whole fleet, worst first', () => {
+    const store = new FleetStore();
+    store.replaceSnapshot([
+      summary(),
+      summary({ shipmentId: 'SHP-DEL-0007', vehicleId: 'VEH-0007' }),
+    ]);
+
+    store.apply({
+      ...raised,
+      shipmentId: 'SHP-DEL-0007',
+      payload: { exceptionId: 'inc-2', type: 'UNPLANNED_STOP', severity: 'WARNING' },
+    } as LiveUpdate);
+    store.apply(raised);
+
+    const open = store.openIncidents();
+    expect(open.map((incident) => incident.exceptionId)).toEqual(['inc-1', 'inc-2']);
+    // The shipment id travels with the incident, which is what lets a fleet-wide row be clicked.
+    expect(open[1].shipmentId).toBe('SHP-DEL-0007');
+  });
+
+  it('leaves the open list alone when a clear names an incident it never saw raised', () => {
+    // Reachable two ways: a breach that was raised and cleared inside one snapshot interval, and a
+    // clear republished after a restart. Neither may disturb what is still open — but the clear is
+    // real news from the platform, so it is still filed as a resolution rather than dropped.
     const store = new FleetStore();
     store.replaceSnapshot([summary()]);
     store.apply(raised);
@@ -325,6 +399,9 @@ describe('exceptions', () => {
     });
 
     expect(store.get('SHP-HYD-0002')?.openExceptions).toHaveLength(1);
+    expect(store.clearedIncidents().map((incident) => incident.exceptionId)).toEqual([
+      'inc-someone-else',
+    ]);
   });
 });
 

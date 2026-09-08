@@ -19,8 +19,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchFleet, fetchMeta } from '../api/client';
 import { subscribeLive, type StreamState } from '../api/stream';
-import type { Meta, Movement } from '../api/types';
-import { FleetStore } from './FleetStore';
+import type { IncidentSummary, Meta, Movement } from '../api/types';
+import { FleetStore, type ResolvedIncident } from './FleetStore';
 
 /** How often the snapshot is re-fetched. Slow, because the stream is what carries movement. */
 const POLL_INTERVAL_MS = 20_000;
@@ -37,6 +37,17 @@ export interface FleetStatus {
   byMovement: Record<Movement, number>;
   openIncidents: number;
   criticalIncidents: number;
+  /**
+   * Every open incident across the fleet, for the exceptions panel.
+   *
+   * A whole array in state, recomputed on the same one-second tick as the counts. Affordable
+   * because it is bounded by how many things are wrong rather than by how many trucks there are —
+   * a fleet of sixty-four running well produces an empty array, and a bad hour produces a dozen
+   * entries. The positions, which arrive a hundred times a second, never come near React.
+   */
+  incidents: IncidentSummary[];
+  /** Incidents this browser has watched clear, most recent first. */
+  clearedIncidents: ResolvedIncident[];
   updatesApplied: number;
   /** Seconds since any update arrived, or null before the first one. */
   quietForSeconds: number | null;
@@ -66,6 +77,8 @@ export function useFleet(): { store: FleetStore; status: FleetStatus; refresh: (
     byMovement: { ...EMPTY_MOVEMENT },
     openIncidents: 0,
     criticalIncidents: 0,
+    incidents: [],
+    clearedIncidents: [],
     updatesApplied: 0,
     quietForSeconds: null,
     snapshotAt: null,
@@ -119,27 +132,27 @@ export function useFleet(): { store: FleetStore; status: FleetStatus; refresh: (
 
     const tick = window.setInterval(() => {
       const byMovement = { ...EMPTY_MOVEMENT };
-      let openIncidents = 0;
-      let criticalIncidents = 0;
-
       for (const shipment of store.all()) {
         if (shipment.movement) {
           byMovement[shipment.movement] += 1;
         }
-        for (const incident of shipment.openExceptions ?? []) {
-          openIncidents += 1;
-          if (incident.severity === 'CRITICAL') {
-            criticalIncidents += 1;
-          }
-        }
       }
+
+      // Read from the store rather than counted here, so the number in the status bar and the list
+      // in the panel can never disagree about what is wrong.
+      const incidents = store.openIncidents();
+      const criticalIncidents = incidents.filter(
+        (incident) => incident.severity === 'CRITICAL',
+      ).length;
 
       setStatus({
         streamState: streamState.current,
         shipments: store.size(),
         byMovement,
-        openIncidents,
+        openIncidents: incidents.length,
         criticalIncidents,
+        incidents,
+        clearedIncidents: store.clearedIncidents(),
         updatesApplied: store.updatesApplied,
         quietForSeconds:
           store.lastUpdateWall === 0

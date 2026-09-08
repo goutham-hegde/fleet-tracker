@@ -530,13 +530,77 @@ it is the one distinction on this map that the dashboard could not work out for 
 
 Clicking a truck draws its plan: the route as booked (dashed, because a straight line between two
 stops is not a road), the geofences as filled circles at their real radii, and the trail of where it
-has actually been. The card beside it carries the live summary and names the reason when there is no
-estimate — a truck parked at a dock has none by design, and a blank would look like a fault.
+has actually been. The card beside it carries the live summary, names the reason when there is no
+estimate — a truck parked at a dock has none by design, and a blank would look like a fault — and
+ends with the manifest.
+
+**The manifest panel has no idea whose manifest it is.** The four seeded customers share no fields
+at all: a pharma consignment carries a drug licence, a batch and a chain of custody; a parcel
+carries a tracking number and a recipient's pincode. One renderer draws both, deciding what to do
+with each part of the body from its shape rather than from its name — an object becomes a titled
+group, an array of objects becomes a table, an array of scalars becomes chips. That is the
+polymorphic-manifest design reaching a screen: a fifth customer costs an inserted schema document
+and no release, and a dashboard with a component per customer would have quietly taken that back.
+
+The two exceptions are contract rather than customer knowledge. `temperature` and `deliveryWindow`
+are the paths this platform reserves and the exception service reads, so those sections are marked
+**enforced** — a temperature band the platform will raise a breach over and one that is decoration
+otherwise look identical.
+
+The panel on the right is every SLA exception across the fleet, fed by the same stream the markers
+are, so a breach appears a Kafka hop and an SSE frame behind the rule that judged it. Resolved
+incidents move down into their own short list with the duration the platform measured, because
+every rule here raises *and* clears and a panel that only grew would show half of that.
+
+**Delivered loads are hidden by default**, with a toggle in the status bar that always shows the
+count. A delivered shipment keeps its last position for ever, so a repeating run stacks finished
+markers on the depots they finished at — twenty minutes of one left 21 of them against 3 moving
+trucks. Nothing is discarded: they stay in the store, stay counted, and come back with one click.
 
 The page loads a snapshot and then follows the stream, which is the shape the API is built around.
 It also re-fetches the snapshot every twenty seconds and on every reconnection, because the stream
 carries no history: a browser that was away for thirty seconds has missed exactly the updates it can
 no longer ask for.
+
+## The demo path
+
+Everything above, in one command, from a stopped platform to trucks moving on a map.
+
+```bash
+./scripts/cluster-start.sh    # if the cluster is stopped
+./scripts/demo.sh up          # ~53s including a full Maven build
+```
+
+It waits for Kafka and MongoDB, builds the services and the dashboard, runs all four seed scripts,
+clears the derived collections, starts the five services and the dashboard, checks the seeded
+manifests against their customers' schemas, and starts a four-truck run with disruptions switched
+on. Then it prints the URL and what to look at for the first sixty seconds.
+
+```bash
+./scripts/demo.sh status   # what is running, and where each log is
+./scripts/demo.sh down     # stop it all. The cluster is left alone
+./scripts/demo.sh reset    # clear the derived collections only (services must be stopped)
+```
+
+**Run `down` before `./mvnw verify`.** On Windows the repackage goal renames a jar that a live JVM
+still holds open, and the failure names neither the service nor the reason.
+
+The clearing step is not housekeeping. A stop arrived at and departed from is terminal, so
+re-running the simulator over the same shipment ids leaves every marker reading `DELIVERED` — the
+geofencer working exactly as designed, and a demonstration in which nothing ever happens.
+
+```bash
+./scripts/check-manifests.sh   # would the platform accept the manifests the platform seeded?
+```
+
+That one runs inside `demo.sh up` and is worth knowing about on its own. The seed script writes
+manifests straight into MongoDB, which is the right shape for a seed — in a real deployment they
+arrive from customers' order systems — but it means the service that owns the manifest contract
+never sees them, and a seeded body can drift from its customer's committed schema with nothing
+anywhere saying so. It had: three of the four customers were storing, reading and rendering data
+that the shipment service would have rejected. This submits one manifest per customer and mode
+through the real endpoint, which is the only check that can tell.
+
 
 ## Prerequisites
 

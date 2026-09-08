@@ -267,7 +267,7 @@ body,
   position: absolute;
   top: 0.85rem;
   left: 0.85rem;
-  width: 22rem;
+  width: 23.5rem;
   max-height: calc(100% - 1.7rem);
   overflow-y: auto;
   background: var(--panel);
@@ -415,18 +415,15 @@ body,
 
 /* --- the legend --------------------------------------------------------- */
 
+/* Positioned by the rail rather than by itself since S16. `margin-top: auto` is what keeps it at
+   the bottom of that column while the exceptions panel takes the space above it. */
 .legend {
-  position: absolute;
-  right: 0.85rem;
-  /* Clear of the map's attribution strip along the bottom edge. OpenStreetMap's licence requires
-     that credit to be visible, so a panel may not sit on top of it. */
-  bottom: 2.3rem;
-  width: 19rem;
+  margin-top: auto;
+  flex: none;
   background: rgb(255 255 255 / 94%);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0.7rem 0.85rem;
-  z-index: 2;
   box-shadow: 0 6px 18px rgb(15 23 42 / 12%);
 }
 
@@ -667,6 +664,341 @@ body,
   white-space: nowrap;
 }
 
+/* --- the manifest ------------------------------------------------------- */
+
+/*
+ * A body this stylesheet knows nothing about.
+ *
+ * Every rule here is keyed on the *shape* a value turned out to have — a field, a nested group, a
+ * table of rows, a list of chips — and never on a customer or a field name, for exactly the reason
+ * the renderer has no `switch` in it. A fifth customer's manifest must arrive and look right with
+ * nothing added below.
+ */
+
+.manifest {
+  display: grid;
+  gap: 0.28rem;
+  font-size: 0.85rem;
+}
+
+.manifest-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.15rem;
+}
+
+.manifest-meta {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+}
+
+.manifest-field {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.manifest-key {
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.manifest-value {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* An absent value, greyed rather than printed as "null" or left blank — a blank cell reads as a
+   rendering fault, and a body is allowed to omit anything its schema does not require. */
+.manifest-value .is-empty,
+.manifest-value.is-empty {
+  color: #94a3b8;
+}
+
+.manifest-group {
+  margin-top: 0.45rem;
+  padding: 0.45rem 0.55rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.manifest-group h4 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+/* A reserved path: a section the platform itself reads and raises SLA breaches from. Marked
+   because a temperature band that has consequences and one that is decoration look identical. */
+.manifest-group.is-reserved {
+  border-color: #bae6fd;
+  background: #f0f9ff;
+}
+
+.manifest-reserved {
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  background: #0284c7;
+  color: #f0f9ff;
+  cursor: help;
+}
+
+.manifest-count {
+  font-size: 0.65rem;
+  padding: 0.05rem 0.32rem;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A table wide enough to need it scrolls inside its own box. The card sits beside a map at a fixed
+   width, and an LTL consignment's pieces carry four columns plus nested dimensions. */
+.manifest-tablewrap {
+  overflow-x: auto;
+}
+
+.manifest-table {
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.manifest-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.6rem 0.25rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.manifest-table td {
+  padding: 0.22rem 0.6rem 0.22rem 0;
+  border-bottom: 1px solid #eef2f7;
+  font-variant-numeric: tabular-nums;
+}
+
+.manifest-table tr:last-child td {
+  border-bottom: none;
+}
+
+.chip {
+  display: inline-block;
+  margin: 0 0.25rem 0.2rem 0;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  background: #e2e8f0;
+  font-size: 0.72rem;
+}
+
+/* --- the right-hand rail ------------------------------------------------ */
+
+/*
+ * The exceptions panel and the legend share a column rather than being positioned separately.
+ *
+ * Two absolutely-positioned panels on the same edge overlap as soon as one of them grows, and the
+ * one that grows here is the list of things that have gone wrong — so the collision appears
+ * exactly when the screen is being read most carefully. A column with the legend pushed to the
+ * bottom cannot collide: the exceptions panel takes what it needs and scrolls inside itself.
+ *
+ * The rail itself does not take pointer events, only its panels do. Otherwise the gap between them
+ * would be an invisible strip down the side of the map that could not be dragged.
+ */
+.rail {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  /* Clear of the map's attribution strip. OpenStreetMap's licence requires that credit to stay
+     visible, so no panel may sit on top of it. */
+  bottom: 2.3rem;
+  width: 21rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.rail > * {
+  pointer-events: auto;
+}
+
+/* --- the exceptions panel ----------------------------------------------- */
+
+.exceptions {
+  background: rgb(255 255 255 / 96%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 12%);
+  padding: 0.7rem 0.85rem 0.75rem;
+  /* Shrinks to fit and scrolls inside itself; `min-height: 0` is what actually allows a flex item
+     to become shorter than its content, without which the legend is pushed off the bottom. */
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.exceptions-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.exceptions-head h2 {
+  margin: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+}
+
+.exceptions-count {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.exceptions-count.is-alerting {
+  color: var(--critical);
+  font-weight: 600;
+}
+
+.exceptions-empty {
+  margin: 0.45rem 0 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.exceptions-list {
+  margin: 0.45rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.exceptions-item {
+  border-left: 3px solid var(--info);
+  border-radius: 4px;
+  background: #f8fafc;
+}
+
+.exceptions-item.severity-warning {
+  border-left-color: var(--warning);
+}
+
+.exceptions-item.severity-critical {
+  border-left-color: var(--critical);
+  background: #fef2f2;
+}
+
+/* A resolved incident stays legible but stops competing with an open one for attention. */
+.exceptions-item.is-cleared {
+  border-left-color: #cbd5e1;
+  background: #f8fafc;
+  opacity: 0.72;
+}
+
+.exceptions-item.is-selected {
+  outline: 2px solid #0284c7;
+  outline-offset: -1px;
+}
+
+/* The row is a button because clicking it moves the map and opens a card — that is an action, and
+   it has to be reachable from a keyboard. Styled back down to look like a list row. */
+.exceptions-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 0.5rem;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.exceptions-row:hover {
+  background: rgb(15 23 42 / 4%);
+}
+
+.exceptions-type {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.exceptions-shipment {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.exceptions-detail {
+  font-size: 0.76rem;
+  color: var(--ink-soft);
+  line-height: 1.35;
+}
+
+.exceptions-when {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.exceptions-cleared {
+  margin-top: 0.7rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--line);
+}
+
+.exceptions-cleared h3 {
+  margin: 0;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+}
+
+/* --- a pressed toggle --------------------------------------------------- */
+
+.button-on {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #f0f9ff;
+}
+
+.button-on:hover {
+  background: #0369a1;
+}
+
+/*
+ * A marker the filter has hidden.
+ *
+ * `display: none` rather than removing the marker: the shipment is still in the store, still
+ * receiving positions and still counted, so switching the filter back on is a class toggle rather
+ * than sixty-four marker rebuilds.
+ */
+.truck.is-filtered {
+  display: none;
+}
+
 /* --- narrow screens ----------------------------------------------------- */
 
 @media (max-width: 720px) {
@@ -680,7 +1012,7 @@ body,
     right: 0.85rem;
   }
 
-  .legend {
+  .rail {
     display: none;
   }
 }

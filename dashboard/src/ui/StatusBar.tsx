@@ -19,7 +19,14 @@ const STREAM_LABEL: Record<FleetStatus['streamState'], string> = {
   reconnecting: 'reconnecting',
 };
 
-export function StatusBar({ status, onRefresh }: { status: FleetStatus; onRefresh: () => void }) {
+interface StatusBarProps {
+  status: FleetStatus;
+  showDelivered: boolean;
+  onToggleDelivered: () => void;
+  onRefresh: () => void;
+}
+
+export function StatusBar({ status, showDelivered, onToggleDelivered, onRefresh }: StatusBarProps) {
   const { byMovement } = status;
 
   return (
@@ -73,6 +80,18 @@ export function StatusBar({ status, onRefresh }: { status: FleetStatus; onRefres
       </dl>
 
       <div className="statusbar-right">
+        {/* The count is here whether or not the markers are, so the filter never hides the fact
+            that something is being hidden. A control that quietly removes trucks from a fleet map
+            is the same class of problem as a dashboard pointed at the wrong database. */}
+        <button
+          type="button"
+          className={showDelivered ? 'button button-on' : 'button'}
+          onClick={onToggleDelivered}
+          aria-pressed={showDelivered}
+          title="Delivered loads keep their last position for ever, so a long run stacks them on the depots they finished at"
+        >
+          {showDelivered ? 'Hide' : 'Show'} delivered ({byMovement.DELIVERED})
+        </button>
         {status.error ? (
           <span className="statusbar-error" title={status.error}>
             API unreachable — {status.error}

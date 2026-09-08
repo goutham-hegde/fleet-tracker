@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-08 · **Current position:** M5 in progress, session S15 of 24
+**Last updated:** 2026-09-09 · **Current position:** M5 complete, session S16 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -12,12 +12,12 @@ M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
 M3 ██████████  3/3              complete
 M4 ██████████  2/2              complete
-M5 ███████░░░  2/3              ← in progress
-M6 ░░░░░░░░░░  0/1
+M5 ██████████  3/3              complete
+M6 ░░░░░░░░░░  0/1              ← next
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               15/24 sessions
+               16/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -134,15 +134,23 @@ makes the project worth showing — everything after adds credibility, nothing a
 
 - [x] **S14** — Query API + SSE stream ✅
 - [x] **S15** — React + MapLibre map with live markers ✅
-- [ ] **S16** — Shipment detail + exceptions panel
+- [x] **S16** — Shipment detail + exceptions panel ✅
 
 **Exit criteria**
 
 - [x] `curl` on the SSE endpoint streams live position and exception events
 - [x] Trucks visibly move on the map in real time
-- [ ] Clicking a shipment renders its manifest correctly for all four customer types
-- [ ] An injected fault appears in the exceptions panel within seconds
-- [ ] The full 60-second demo path runs start to finish without intervention
+- [x] Clicking a shipment renders its manifest correctly for all four customer types — by one
+  renderer with no knowledge of any customer, verified in a real browser against all four
+- [x] An injected fault appears in the exceptions panel within seconds — the panel is fed by the
+  SSE stream rather than a poll, and three of the five rules fired during the verification run
+- [x] The full 60-second demo path runs start to finish without intervention — `./scripts/demo.sh
+  up` takes 53 seconds from a stopped platform, Maven build included
+
+**All five criteria pass as of 2026-09-09. M5 is complete and M6 is unblocked.** A stranger can
+watch this platform work: four freight lanes moving live, a manifest per load rendered by code that
+has never heard of the customer who sent it, and every SLA breach the rules raise appearing on
+screen seconds after the evidence does — and going away again when it ends.
 
 ---
 
@@ -1704,46 +1712,142 @@ into "every marker is exactly sixteen pixels below the last one".
 
 ---
 
+## S16 — The paperwork, the alarms and the demo · 2026-09-09 · M5
+
+S15 put the fleet on a map. What it could not yet show was what is *inside* a truck, or what is
+wrong across the whole fleet in one place — and running any of it meant seven terminals in an order
+that is obvious only once you already know it. S16 closes all three, which closes M5.
+
+**Built:** a manifest panel that has no idea whose manifest it is, a fleet-wide exceptions panel fed
+by the live stream, a filter for finished loads, and `scripts/demo.sh` — the whole platform from a
+stopped cluster to trucks moving, in one command and 53 seconds.
+
+The manifest panel is the piece that matters. The four seeded customers share **no fields at all**:
+MediVault sends a drug licence, a batch and a chain of custody; QuickShip sends a tracking number
+and a recipient's pincode. One renderer draws both, and there is no `switch (customerId)` anywhere
+in it. It decides what to do with each part of a body from the body's *shape* — an object becomes a
+titled group, an array of objects becomes a table with the union of its rows' columns, an array of
+scalars becomes chips, everything else is a labelled value — and it works out how to write a number
+from a suffix on its name rather than from a field any particular customer happens to have.
+
+Two things it does know, and both are platform contract rather than customer knowledge:
+`temperature` and `deliveryWindow` are the paths this platform reserves and the exception service
+reads, so those sections are marked **enforced**. A temperature band the platform will raise a
+critical breach over and one that is decoration look identical otherwise.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| How a manifest is rendered | One renderer that dispatches on the *shape* of each value | A component per customer, which is the obvious way to make four very different manifests look good and quietly undoes the whole design. The point of storing manifests in MongoDB with per-customer JSON Schema is that a fifth customer costs an inserted document; a fifth customer whose manifest renders as a blank panel until somebody ships a component costs a release instead |
+| Whether the panel marks reserved paths | Yes, with the reason | Rendering every field alike. `temperature` and `deliveryWindow` are the two places the exception service reads a customer's commitment from, so a number in one of them has consequences and a number beside it does not — and nothing on screen said which. Marking them is not customer knowledge: it is the contract every customer is offered |
+| Where the exceptions panel gets its data | The same store the markers use, fed by the SSE stream | Polling `/api/exceptions`, which exists and would show a breach seconds late. "An injected fault appears in the exceptions panel within seconds" is an M5 exit criterion, so the panel is a stream consumer or it is nothing |
+| Whether cleared incidents stay on screen | Yes, in their own short list, with how long each lasted | Removing a breach the moment it clears. Every rule in this platform raises *and* clears, and an incident is one condition from onset to resolution rather than one message — a panel that only ever grew would demonstrate half of that and would say nothing about whether the truck started moving again |
+| How long an open incident has lasted | Not shown as a counter; the onset instant is shown instead | Counting up from `onsetAt` against the browser's clock. Incident timestamps are *event* time, and under a time-scaled run event time outruns the wall clock — a breach that has genuinely lasted forty simulated minutes subtracts to a negative number. Cleared incidents show `openForSeconds`, which the platform measured itself. No interval on this panel is computed from a clock the browser holds |
+| Delivered loads on a live map | Hidden by default, with a toggle that always shows the count | Two rejected: leaving them (after twenty minutes the fleet view was 21 finished markers stacked on four depots against 3 moving trucks — every one correct, and the screen mostly history) and dropping them from the store (a control that silently removes trucks from a fleet map is the same class of problem as a dashboard pointed at the wrong database). A shipment selected from the exceptions panel is drawn whatever the filter says, because opening a card for a marker that is not there is worse than either |
+| What the demo path is | A script that runs the existing arrangement — jars on the host against Kafka and Mongo in Kind | Containerising the services first, which is M6 and a whole session. This makes the current arrangement reproducible without pretending to be the next milestone |
+| Whether the demo path clears derived state | Always, before the consumers start | Leaving it, which looks like the safer choice and produces a demonstration in which nothing happens: a stop arrived at and departed from is terminal, so re-running the simulator over the same shipment ids leaves every marker reading `DELIVERED`. That is S10 working correctly |
+| Checking the seeded manifests | Submit one per customer and mode through the shipment service, inside the demo path | Trusting the seed script, which is what had been happening. See below |
+
+### What surprised me
+
+**Three of the four seeded customers were storing data the platform itself would have rejected.**
+`seed-manifests.sh` writes straight into MongoDB — the right shape for a seed, since in a real
+deployment manifests arrive from customers' order systems — but it means the one component that owns
+the manifest contract never sees them. Rendering the bodies for the first time made it visible:
+VistaMart's purchase orders were bare strings where the schema wants objects with a line count and a
+value, Southern Freight's pieces carried a `count` field the schema forbids, and QuickShip's
+tracking numbers, service levels and phone numbers all failed their own patterns.
+
+Every one of them had stored, read and rendered perfectly since S13. Nothing was broken; it was
+simply data the platform would have refused, sitting in the platform's database and being shown to
+people as though it had passed. The fix is two parts: the seed script now produces bodies that
+validate, and `scripts/check-manifests.sh` submits one manifest per **(customer, mode)** — the pair
+a schema is keyed by — through the real endpoint, as a gate inside `demo.sh up`. Planting a
+deliberately broken manifest confirmed the guard fails loudly rather than passing quietly.
+
+**Writing that guard produced a second finding, and a good one.** It began rejecting manifests it
+had accepted a minute earlier. The two writers disagree about the document's shape: the seed script
+stores a `shipmentId` field alongside `_id`, while the shipment service stores the id only as `_id`
+— which is correct, since the manifest's id *is* the shipment id and a second copy is a field that
+can drift. Reading `shipmentId` therefore worked on a seeded document and produced an envelope with
+no id at all on one the service had itself written, which the endpoint answers with a bare `400`
+naming nothing. A guard that only works on data nobody has touched is not a guard.
+
+**A wall clock and an event clock look interchangeable right up until they are not.** The first
+version of the exceptions panel counted up from each incident's onset, which is the obvious thing to
+put on an alarm list. It produces a negative number for every open incident under a time-scaled run,
+clamped to a permanent "0s so far". Same shape as the trap `SignalLossRule` is built around and the
+one `staleSeconds` avoids in the API — the third time this project has met it, and the first time in
+the browser.
+
+**A unit belongs in the value, not in both.** Rendering the pharma manifest produced "Min c: 2.0 °C"
+and "Weight KG: 1.8 kg" — labels derived mechanically from field names, each repeating or mangling a
+unit the value already carried. The label now drops a unit suffix when the formatter is the thing
+rendering that unit, and only then: `freightClass` keeps every letter, because nothing here knows
+what a class is.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `npm test` (Vitest) | 39 passed — 19 store tests from S15, 3 new ones on the resolved-incident log and the fleet-wide list, 17 on the manifest walk |
+| `npm run lint` (oxlint), `tsc -b`, `npm run build` | All clean. 1,233 kB of JavaScript, 338 kB gzipped |
+| `./mvnw verify` | Green across the reactor, unchanged by this session |
+| `./scripts/demo.sh up` from a stopped platform | **53 seconds**, Maven build included, to a rolling fleet on `localhost:18080` |
+| `./scripts/check-manifests.sh` | All four customer contracts satisfied after the seed fix. With a deliberately broken manifest planted, it exits 1 and names the violated fields |
+| Live run: 4 trucks, `disrupted`, time-scale 150, repeat-routes on | tracking-processor `stored=4866 duplicates=9 dlq=0`, 10 arrivals, 9 departures, `etas=850/4866 (17%)` |
+| exception-service over that run | `consumed[positions=4992 statuses=137 derived=906 dlq=0] incidents[raised=4 cleared=2 restated=768]` |
+| dashboard-api over that run | `positions=5122 thinned=3665 statuses=140 derived=960 exceptions=6 unreadable=0`, nothing dropped or refused |
+| Rules that fired | `ROUTE_DEVIATION`, `UNPLANNED_STOP` and `TEMPERATURE_EXCURSION`, three of the five, raised and cleared from injected disruptions |
+| Headless browser against the built assets (outside the repo) | All four manifests render, each completely differently, from one panel. Only VistaMart's `deliveryWindow` and MediVault's `temperature` marked enforced |
+| Basemap, checked explicitly | **290 tiles loaded, 0 failed**, no console errors — worth asserting, because S15's fault showed a full map with every tile silently cancelled |
+| Delivered filter | The delivered marker carried `is-filtered` with zero size and was absent from the trail layer; the toggle restored it, and the status bar kept counting it throughout |
+
+### Left open
+
+- **The exceptions panel shows only what this browser has watched clear.** A breach that cleared
+  before the page opened is not in the "recently cleared" list; `/api/exceptions?open=false` has the
+  full history and is deliberately not fetched, because the panel is a live view rather than an
+  audit trail.
+- **The manifest panel renders a customer's own enum values verbatim** — `NEXT_DAY`, `LIFTGATE`.
+  Platform enums are humanised because they are ours; rewriting a customer's data on screen is
+  worse than an underscore, but it does read inconsistently.
+- **The demo path is host jars against a cluster.** Every service still runs as a jar started by a
+  script, which is exactly what M6 replaces.
+- **`check-manifests.sh` samples one manifest per customer and mode.** That covers every schema on
+  file, and would miss a single bad document among sixty-four.
+- Carried forward from S15: the snapshot is still a twenty-second poll; the wire contract is still
+  hand-written on both sides with nothing checking it at build time; truck and stop labels still
+  overlap where a truck is parked in its geofence; the basemap is still OpenStreetMap's own tile
+  servers, which M8 must replace with a keyed style; one 1.2 MB bundle; and the 5 km/h moving
+  threshold is still stated in two languages.
+- Carried forward from S13/S14: the corridor still cannot tell "left the road" from "went somewhere
+  else"; a reefer reading still carries no position; the exception service's last-seen map is still
+  in memory; and the projection drift guard still runs in one direction only.
+
+---
+
 ## Next up
 
-**S16 — the detail panel and the demo path.** The map draws the fleet and moves it; what it does not
-yet do is render what is *in* a truck, or list what is wrong across the whole fleet in one place. A
-marker click currently opens a summary card and names the manifest's customer without showing the
-manifest, which is the last piece of M4's argument that has never reached a screen: four customers
-whose bodies share no fields at all, rendered by one panel that has no opinion about what is inside
-them.
+**S17 — reproducible deployment, and the start of M6.** Every service in this project still runs as
+a jar on the host, started by a script, against a Kafka and a MongoDB that live in Kind. S16 made
+that arrangement reproducible in one command; M6 replaces it. The session builds container images
+with Jib, adds `deploy/overlays/local` on top of the base that has been there since M0, and gives
+every workload readiness and liveness probes, memory limits and an HPA on the tracking processor.
 
-Three things sit in S16's way, and all three are M5 exit criteria: a manifest rendered correctly for
-all four customer types, an injected fault appearing in an exceptions panel within seconds, and the
-whole sixty-second demo path running start to finish without intervention. The API already answers
-every one of those questions — `/api/shipments/{id}` carries the manifest body untouched and
-`/api/exceptions` returns incidents flat with their shipment ids — so S16 is rendering and
-choreography rather than new plumbing.
+Its exit criteria: `kubectl apply -k deploy/overlays/local` brings the whole stack up healthy from
+scratch; every pod passes its probes and none is OOMKilled under simulator load; and the HPA scales
+`tracking-processor` when consumer lag climbs.
 
-One more thing S16 should decide rather than inherit: a live map that keeps every delivered load
-on it fills with history. Twenty minutes of a repeating run left 21 delivered markers stacked on
-four depots against 3 moving trucks. Every one of them is a real shipment with a real last position,
-so this is a question about what a *live* view is for rather than a defect.
+Three things S17 should know before it starts. The memory budget is already decided — `512Mi` per
+service with `-XX:MaxRAMPercentage=75`, on a single Kind node whose Kafka and MongoDB already cost
+about 625 MB on top of a 660 MB idle cluster. Kind has no metrics-server, so `kubectl top` does not
+work and an HPA needs one installed before it can scale on anything. And the ports this project has
+used all along are host ports through Kind's mappings; inside the cluster the services reach each
+other by service name, which is a configuration change per service rather than a code change.
 
-Two things S16 should know before it starts. Re-running the simulator over the same shipment ids
-leaves every marker reading `DELIVERED`, because a stop arrived at and departed from is terminal:
-a clean demonstration run means stopping the tracking processor, dropping the derived collections
-(`geofence.state`, `shipment.eta`, `shipment.position`, `exception.state`, `exceptions`,
-`position.history`) and restarting it — the processor recreates the time-series collection itself.
-And the demo path wants the disrupted profile with `repeat-routes` left on, so the fleet keeps
-moving for as long as somebody is watching.
+`scripts/demo.sh` is the thing M6 should eventually retire, and the honest way to judge S17 is
+whether the same demonstration can be brought up from manifests instead. Keep the script working
+until it can.
 
-S15 leaves behind: a snapshot polled every twenty seconds rather than live, so a server conclusion
-that changes without an event to announce it is stale for up to that long; a wire contract written
-by hand on both sides, where a renamed field compiles cleanly and shows as a blank on screen; the
-5 km/h moving threshold now stated in two languages; OpenStreetMap's own tile servers as the
-basemap, which M8 must replace with a keyed style; and a single 1.2 MB bundle, nearly all of it
-MapLibre and all of it needed on first paint.
-
-Carried forward from S14: the projection drift guard still runs one way only. From S13: an off-route
-rule whose tolerance is the whole of its accuracy and which needs route geometry to do better; a
-temperature rule that cannot tell a warm trailer on a loading bay from a failing unit on a motorway,
-because a reefer reading carries no position; and a last-seen record held in memory, so silence
-detection warms up after a restart.
-
-Still nothing containerized, and that is M6's problem rather than M5's.

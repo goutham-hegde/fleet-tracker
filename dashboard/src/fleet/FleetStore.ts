@@ -84,9 +84,32 @@ function worstOf(incidents: IncidentSummary[] | undefined): Severity | undefined
   return worst;
 }
 
+/**
+ * An incident this browser watched clear.
+ *
+ * Not a wire type: it is the raise and the clear merged, which is a thing only a client that saw
+ * both can produce. `openForSeconds` comes from the clear event and is the *platform's* measure of
+ * how long the condition lasted, in event time — the only honest duration available here, since a
+ * browser holding a wall clock cannot measure an interval in simulated time.
+ */
+export interface ResolvedIncident extends IncidentSummary {
+  openForSeconds?: number;
+}
+
+/**
+ * How many resolved incidents are kept.
+ *
+ * A ring rather than everything, because a repeating run raises and clears indefinitely and this
+ * is a live view rather than an audit trail. The full history, including everything cleared before
+ * this page was opened, is a query away on `/api/exceptions?open=false` — deliberately not fetched
+ * here, because what the panel is for is watching a breach appear and then go away again.
+ */
+const RESOLVED_LIMIT = 40;
+
 export class FleetStore {
   private readonly shipments = new Map<string, FleetShipment>();
   private readonly trails = new Map<string, LngLat[]>();
+  private resolved: ResolvedIncident[] = [];
   private readonly shipmentListeners = new Set<ShipmentListener>();
   private readonly snapshotListeners = new Set<SnapshotListener>();
 
@@ -114,7 +137,13 @@ export class FleetStore {
     return this.trails.get(shipmentId) ?? [];
   }
 
-  /** Every open incident across the fleet, worst first. */
+  /**
+   * Every open incident across the fleet, worst first and then most recent.
+   *
+   * Assembled from the shipments rather than held as a second list, so there is exactly one place
+   * an incident lives and no way for a panel and a marker to disagree about whether a truck has a
+   * problem. Sixty-four shipments with a handful of incidents between them is nothing to walk.
+   */
   openIncidents(): IncidentSummary[] {
     const incidents: IncidentSummary[] = [];
     for (const shipment of this.shipments.values()) {
@@ -122,10 +151,19 @@ export class FleetStore {
         incidents.push(...shipment.openExceptions);
       }
     }
-    return incidents.sort(
-      (a, b) =>
-        (b.severity ? SEVERITY_RANK[b.severity] : 0) - (a.severity ? SEVERITY_RANK[a.severity] : 0),
-    );
+    return incidents.sort(compareIncidents);
+  }
+
+  /**
+   * Incidents this browser has watched clear, most recently resolved first.
+   *
+   * Worth keeping, and not only for completeness: an alerting system that can only raise is half
+   * of one, and a panel where breaches accumulate and never leave says nothing about whether the
+   * condition ended. These are the browser's own observations — a page opened after a breach
+   * cleared has no record of it, which is honest about what a live view is.
+   */
+  clearedIncidents(): ResolvedIncident[] {
+    return [...this.resolved].reverse();
   }
 
   // -- subscribing --------------------------------------------------------
@@ -298,9 +336,30 @@ export class FleetStore {
       }
 
       case 'exception.cleared': {
+        const cleared = (existing.openExceptions ?? []).find(
+          (incident) => incident.exceptionId === update.payload.exceptionId,
+        );
         const openExceptions = (existing.openExceptions ?? []).filter(
           (incident) => incident.exceptionId !== update.payload.exceptionId,
         );
+        // The raise is what carries the onset, the type and the severity; the clear carries the
+        // resolution and little else. Merging them is what makes "cold chain breach, 4 minutes,
+        // resolved" a sentence — and the incident id is what pairs the two, which is the whole
+        // reason the platform derives that id from the onset rather than minting a fresh one.
+        this.recordResolved({
+          ...cleared,
+          exceptionId: update.payload.exceptionId,
+          shipmentId: update.shipmentId,
+          type: update.payload.type ?? cleared?.type ?? 'UNKNOWN',
+          severity: update.payload.severity ?? cleared?.severity,
+          state: 'CLEARED',
+          onsetAt: cleared?.onsetAt ?? update.payload.raisedAt,
+          raisedAt: update.payload.raisedAt ?? cleared?.raisedAt,
+          clearedAt: update.at,
+          detail: cleared?.detail ?? update.payload.detail,
+          resolution: update.payload.resolution,
+          openForSeconds: update.payload.openForSeconds,
+        });
         next = {
           ...existing,
           openExceptions: openExceptions.length > 0 ? openExceptions : undefined,
@@ -331,6 +390,23 @@ export class FleetStore {
     return true;
   }
 
+  /**
+   * File a resolved incident, replacing any earlier record of the same one.
+   *
+   * Keyed on the incident id for the same reason a raise is: the platform republishes
+   * byte-identical events after a restart, and a resolved list that grew a second copy would be
+   * this dashboard inventing history the platform did not report.
+   */
+  private recordResolved(incident: ResolvedIncident): void {
+    this.resolved = this.resolved.filter(
+      (existing) => existing.exceptionId !== incident.exceptionId,
+    );
+    this.resolved.push(incident);
+    if (this.resolved.length > RESOLVED_LIMIT) {
+      this.resolved.shift();
+    }
+  }
+
   private pushTrail(shipmentId: string, point: LngLat): void {
     const trail = this.trails.get(shipmentId);
     if (!trail) {
@@ -349,6 +425,22 @@ export class FleetStore {
       trail.shift();
     }
   }
+}
+
+/**
+ * Worst first, then most recently begun.
+ *
+ * Severity before recency because a panel is read from the top and a critical breach that started
+ * an hour ago still outranks a warning that started a minute ago. Within a severity, newest first,
+ * because that is the one somebody has not yet looked at.
+ */
+function compareIncidents(a: IncidentSummary, b: IncidentSummary): number {
+  const bySeverity =
+    (b.severity ? SEVERITY_RANK[b.severity] : 0) - (a.severity ? SEVERITY_RANK[a.severity] : 0);
+  if (bySeverity !== 0) {
+    return bySeverity;
+  }
+  return (b.onsetAt ?? '').localeCompare(a.onsetAt ?? '');
 }
 
 /**

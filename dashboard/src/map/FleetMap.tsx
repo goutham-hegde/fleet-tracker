@@ -40,10 +40,20 @@ interface FleetMapProps {
   store: FleetStore;
   selected: string | null;
   detail: ShipmentDetail | null;
+  /**
+   * Whether finished loads are drawn.
+   *
+   * A delivered shipment keeps its last position for ever, so a run that repeats routes stacks
+   * completed markers on the depots it finished at — twenty minutes of one left twenty-one of them
+   * against three moving trucks. Every one is a real shipment with a real last position, so this
+   * is a question about what a *live* view is for rather than a defect, and it is answered by
+   * letting the viewer decide rather than by dropping data.
+   */
+  showDelivered: boolean;
   onSelect: (shipmentId: string | null) => void;
 }
 
-export function FleetMap({ store, selected, detail, onSelect }: FleetMapProps) {
+export function FleetMap({ store, selected, detail, showDelivered, onSelect }: FleetMapProps) {
   const container = useRef<HTMLDivElement | null>(null);
   const map = useRef<MapLibreMap | null>(null);
   const ready = useRef(false);
@@ -57,6 +67,10 @@ export function FleetMap({ store, selected, detail, onSelect }: FleetMapProps) {
   const selectedRef = useRef<string | null>(selected);
   const fitted = useRef(false);
   const trailFrame = useRef<number | null>(null);
+
+  // Mirrored for the same reason selection is: the marker styling runs inside subscriptions that
+  // are registered once and would otherwise close over the value this prop had at that moment.
+  const showDeliveredRef = useRef(showDelivered);
 
   // -- the map, created once ------------------------------------------------
 
@@ -143,9 +157,9 @@ export function FleetMap({ store, selected, detail, onSelect }: FleetMapProps) {
 
   useEffect(() => {
     selectedRef.current = selected;
-    for (const [shipmentId, marker] of truckMarkers.current) {
-      marker.getElement().classList.toggle('is-selected', shipmentId === selected);
-    }
+    // Re-styled in full rather than only toggling the selected class: a delivered load picked from
+    // the exceptions panel is hidden by the filter, and selecting it has to bring it back.
+    syncAll();
     drawTrails();
 
     // Ease to the truck once, when it is picked — not on every update it then sends. A map that
@@ -166,6 +180,13 @@ export function FleetMap({ store, selected, detail, onSelect }: FleetMapProps) {
     drawSelection();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail, selected]);
+
+  useEffect(() => {
+    showDeliveredRef.current = showDelivered;
+    syncAll();
+    drawTrails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDelivered]);
 
   // -- drawing --------------------------------------------------------------
 
@@ -203,7 +224,13 @@ export function FleetMap({ store, selected, detail, onSelect }: FleetMapProps) {
     } else {
       marker.setLngLat([shipment.longitude, shipment.latitude]);
     }
-    styleTruck(marker.getElement(), shipmentId, shipment, selectedRef.current === shipmentId);
+    styleTruck(
+      marker.getElement(),
+      shipmentId,
+      shipment,
+      selectedRef.current === shipmentId,
+      isDrawn(shipment, shipmentId),
+    );
   }
 
   /**
@@ -230,7 +257,7 @@ export function FleetMap({ store, selected, detail, onSelect }: FleetMapProps) {
     const features: FeatureCollection<LineString>['features'] = [];
     for (const shipment of store.all()) {
       const trail: LngLat[] = store.trail(shipment.shipmentId);
-      if (trail.length < 2) {
+      if (trail.length < 2 || !isDrawn(shipment, shipment.shipmentId)) {
         continue;
       }
       features.push({
@@ -333,6 +360,20 @@ export function FleetMap({ store, selected, detail, onSelect }: FleetMapProps) {
    * Only the first time trucks appear. Re-fitting on every snapshot would pull the view back out
    * every twenty seconds, undoing whatever the person watching had just zoomed into.
    */
+  /**
+   * Whether this shipment appears on the map at all.
+   *
+   * A selected shipment is always drawn, whatever the filter says. Hiding the truck somebody just
+   * clicked — from the exceptions panel, say, which can name a load that has since been delivered
+   * — would open a card describing a marker that is not there.
+   */
+  function isDrawn(shipment: FleetShipment, shipmentId: string): boolean {
+    if (showDeliveredRef.current || shipment.movement !== 'DELIVERED') {
+      return true;
+    }
+    return selectedRef.current === shipmentId;
+  }
+
   function fitToFleetOnce(): void {
     if (fitted.current || !map.current || store.size() === 0) {
       return;
@@ -443,6 +484,7 @@ function styleTruck(
   shipmentId: string,
   shipment: FleetShipment,
   isSelected: boolean,
+  isDrawn: boolean,
 ): void {
   const movement = shipment.movement ?? 'STOPPED';
   const severity = shipment.worstSeverity;
@@ -465,6 +507,10 @@ function styleTruck(
     );
   }
   element.classList.toggle('is-selected', isSelected);
+  // Hidden with a class rather than by removing the marker: the shipment is still in the store,
+  // still receiving positions, and still counted in the status bar. Only the drawing is suppressed,
+  // so switching the filter back on costs a class toggle rather than sixty-four marker rebuilds.
+  element.classList.toggle('is-filtered', !isDrawn);
 
   // Ten minutes of the browser's own elapsed time with no news. Faded rather than hidden: a
   // position is not wrong because it is old, it is just old, and a marker that disappeared would
