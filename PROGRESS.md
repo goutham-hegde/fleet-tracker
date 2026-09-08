@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-08 · **Current position:** M5 in progress, session S14 of 24
+**Last updated:** 2026-09-08 · **Current position:** M5 in progress, session S15 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -12,12 +12,12 @@ M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
 M3 ██████████  3/3              complete
 M4 ██████████  2/2              complete
-M5 ███░░░░░░░  1/3              ← in progress
+M5 ███████░░░  2/3              ← in progress
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               14/24 sessions
+               15/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -133,7 +133,7 @@ argument becomes demonstrable rather than asserted.
 makes the project worth showing — everything after adds credibility, nothing after adds viability.
 
 - [x] **S14** — Query API + SSE stream ✅
-- [ ] **S15** — React + MapLibre map with live markers
+- [x] **S15** — React + MapLibre map with live markers ✅
 - [ ] **S16** — Shipment detail + exceptions panel
 
 **Exit criteria**
@@ -1553,32 +1553,148 @@ so it did not run its lanes to completion. Every figure above is from that run a
 
 ---
 
+## S15 — The map · 2026-09-08 · M5
+
+Every session before this one produced data. Four feeds normalize into one stream, a processor turns
+the stream into positions and arrivals and estimates, a service holds the paperwork, a fourth judges
+all of it against what customers agreed to, and S14 exposed the lot over five endpoints. Nothing
+drew any of it. S15 is the browser.
+
+**Built:** `dashboard/` — React 19, Vite 8, TypeScript and MapLibre GL 6 against
+`http://localhost:18083`. It loads a snapshot, follows the live stream, and moves a marker per
+shipment across an OpenStreetMap basemap. A marker carries four independent facts: fill colour for
+what the truck is doing, a ring for the worst SLA exception open against it, a fade for how long
+since anything was heard from it, and rotation for its heading. Clicking one draws its plan — the
+booked route as a dashed line, the geofences as circles at their real radii, the trail of where it
+has actually been — and opens a card with the live summary beside it.
+
+The dashboard is deliberately not one component per API endpoint. Three pieces carry the design:
+
+| Piece | Does |
+|---|---|
+| `src/api/` | The wire contract as TypeScript types, four `GET`s, and the SSE subscription |
+| `src/fleet/FleetStore.ts` | What the browser believes about the fleet, and what one live update is allowed to change |
+| `src/map/FleetMap.tsx` | MapLibre, driven imperatively: markers, trails, routes, geofences |
+
+The last of M5's front-end work is S16: the manifest panel, the fleet-wide exceptions list, and the
+sixty-second demo path.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| Language | TypeScript | Plain JavaScript. The API omits nulls, so nearly every field on a response is optional and reaching through an absent `nextStop` is the single easiest mistake to make against it. Written as types, that is a compile error rather than a marker that silently vanishes. It is also the same class of bug S14 already named — a projection that drifts from what the writer actually stores — caught at build time in one direction at least |
+| Where the fleet is held | A plain store outside React, with subscribers | React state. At time-scale 300 each truck reports about twice a second, and every one of those would re-render a component tree in order to move a marker MapLibre puts in the DOM itself. Only aggregates a person *reads* rather than watches are bridged into React, on a one-second timer, plus the single selected shipment through `useSyncExternalStore` |
+| What a live update may change | Only what it settles outright | Recomputing the server's conclusions in the browser. Whether a truck counts as at a stop is a geofence decision made from hysteresis, a dwell threshold and an accuracy gate — none of which a browser holds. So an announced arrival is applied, an estimate for a stop the marker is not heading for is refused, and everything else waits for the snapshot poll. The one duplicated constant is the 5 km/h moving threshold, and it is duplicated knowingly: the alternative is a marker that stays green for twenty seconds after its truck stops |
+| How drift is corrected | Re-fetch the snapshot every twenty seconds, and on every stream reconnection | Trusting the stream indefinitely, which leaves any field the browser cannot amend wrong for ever, and never notices a shipment that started reporting after the page loaded. The reconnection re-fetch is not an optimisation: the stream carries no history by design, so a client that was away for thirty seconds has missed exactly the updates it can no longer ask for |
+| Basemap | OpenStreetMap raster tiles, style defined in code, overridable by one environment variable | MapLibre's own demo tiles, which are country outlines and nothing else — a truck between Nagpur and Mumbai would sit on blank beige, which undercuts the point of watching it. Also rejected for now: a keyed vector style, which means a signup and a secret before the dashboard draws anything. The variable is the escape hatch for M8, where OpenStreetMap's tile-usage policy makes a keyed style the right answer |
+| How trucks and stops are drawn | DOM markers | A MapLibre symbol layer, which is the obvious choice and cannot carry text here: text in a layer needs a glyph server, and a raster basemap has none. Trails, routes and geofences *are* layers, because there is one per shipment rather than one per vertex |
+| How a geofence is drawn | A generated 32-point polygon in real metres | MapLibre's circle layer, which is sized in screen pixels and would draw a 400 m yard and a 120 m kerbside dock at exactly the same size. The difference between those radii is the whole reason the platform stores a radius per stop, so drawing them identically would erase the point |
+| What a marker click opens | A summary card, with the manifest deferred | Building the full detail panel now. The card exists because the API's reconciliations are invisible until something puts them on screen — a withheld estimate, a next stop chosen by plan order rather than proximity — and because a marker you cannot click is a dot. Rendering a customer's manifest body is S16's exit criterion and its own piece of work |
+| What is tested without a browser | The store's update logic, in Vitest | Testing the map, which needs a real browser and a WebGL context to say anything at all. The useful check on the map is a person watching trucks move; the useful check on the store is that it refuses to conclude things — 19 tests, most of them about restraint |
+
+### What surprised me
+
+**The scaffold ships with `strict` off and `erasableSyntaxOnly` on.** The second is new and worth
+knowing: it restricts TypeScript to syntax a compiler can *delete* rather than rewrite, so
+constructor parameter properties — `constructor(readonly status: number)` — no longer compile. The
+first matters more. Without strict null checks, a file full of optional fields documents the
+optionality and enforces none of it, which is the opposite of the reason for choosing TypeScript at
+all. Both were changed deliberately rather than worked around.
+
+**The linter found a real bug, and it was in the one number that has to keep changing when nothing
+is happening.** The shipment card computed staleness with `Date.now()` during render. React
+re-renders when something changes; a truck that goes silent changes nothing — so "heard 40s ago"
+would freeze at the exact moment it became the most interesting figure on the card. It now reads a
+clock that ticks on its own. The generalisable shape: a value derived from the current time is not a
+render-time computation, it is state with a timer behind it.
+
+**Named server-sent events do not fire `onmessage`.** The API sends `event: position`, which means a
+browser must register a listener per event name; a default `onmessage` handler receives nothing and
+reports nothing. The stream looks connected, the network tab shows bytes arriving, and no marker
+ever moves. The list of names is therefore a type rather than string literals scattered through the
+subscription code.
+
+**Re-running the simulator against the same shipment ids leaves the platform correctly reporting a
+delivered fleet.** A stop arrived at and departed from is terminal, so a second run over the same
+loads announces no arrivals, publishes no estimates, and every marker reads `DELIVERED` with no next
+stop. Nothing is broken — this is S10's rule doing exactly what it says — but a demonstration re-run
+needs the derived collections dropped first. Which in turn means stopping the tracking processor
+first, because `position.history` is a time-series collection and dropping it under a running
+consumer is precisely the failure S10 hit; the processor recreates it explicitly at startup. Worth
+naming as a demo procedure rather than rediscovering it every time.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `npm run build` (tsc + Vite) | Clean. 1,224 kB of JavaScript, 336 kB gzipped — MapLibre is roughly 800 kB of it |
+| `npm run lint` (oxlint) | Clean, after fixing all four warnings rather than silencing them |
+| `npm test` (Vitest) | 19 passed — position handling, terminal states, trail buffering, estimate matching, incident dedup and clearing, subscriber notification |
+| API shapes against the TypeScript | Checked field by field against a live `/api/shipments` response, including a nested `nextStop` with `remainingKm` measured on the request and an open `ROUTE_DEVIATION` at `WARNING` |
+| Whole path, first run: 4 trucks, `disrupted`, time-scale 300, routes to completion | Simulator sent 6,423 messages (4,585 telematics, 1,562 mobile, 257 reefer, 19 EDI); gateway refused and dropped none |
+| tracking-processor over that run | `stored=6102 duplicates=22 dlq=0`, 6 arrivals, 4 departures, `etas=1572/6102 (26%)` |
+| exception-service over that run | `raised=11 cleared=12`, one open at the end, `dlq=0` |
+| dashboard-api over that run | `positions=6124 thinned=4592 statuses=303 derived=1582 exceptions=23 unreadable=0` — 75% of positions thinned by the half-second per-shipment gate |
+| Live state a browser sees | Two trucks moving with real estimates, two inside geofences reporting `AT_A_STOP` as the reason no estimate is published — one of them at 56 km/h, which the platform still calls `AT_STOP` and the dashboard does not argue with |
+
+### Left open
+
+- **The manifest is not rendered yet**, and neither is a fleet-wide exceptions panel. Both are S16,
+  and both are M5 exit criteria.
+- **The snapshot is still a poll.** Twenty seconds, plus every reconnection. A field the browser
+  cannot amend from the stream is stale for up to that long — visible only where a server conclusion
+  changes without an event to announce it.
+- **The basemap is OpenStreetMap's own tile servers**, which their usage policy reserves for light
+  traffic. Fine for one laptop; M8 needs `VITE_BASEMAP_STYLE` pointed at a keyed style.
+- **One bundle, 1.2 MB.** MapLibre is nearly all of it and is needed on first paint, so code
+  splitting would move the same bytes to a second request.
+- **The 5 km/h moving threshold now exists in two languages.** Change it on the server and the
+  marker colours disagree with the server's own `movement` until the next snapshot.
+- **Nothing pins the wire contract at build time.** The TypeScript types are hand-written from the
+  Java records; a renamed field on the server compiles cleanly on both sides and shows up as a blank
+  on screen. Same shape as S14's one-directional projection guard, one layer further out.
+- Carried forward: the corridor still cannot tell "left the road" from "went somewhere else"; a
+  reefer reading still carries no position; the exception service's last-seen map is still in memory.
+  Still nothing containerized, which is M6's problem.
+
+---
+
 ## Next up
 
-**S15 — the map itself.** The API now answers every question a live map asks and pushes every change
-as it happens; nothing draws any of it. S15 is React, Vite and MapLibre GL against
-`http://localhost:18083`: load `/api/shipments` for the state of the world, open `/api/stream`, and
-move the markers as updates arrive.
+**S16 — the detail panel and the demo path.** The map draws the fleet and moves it; what it does not
+yet do is render what is *in* a truck, or list what is wrong across the whole fleet in one place. A
+marker click currently opens a summary card and names the manifest's customer without showing the
+manifest, which is the last piece of M4's argument that has never reached a screen: four customers
+whose bodies share no fields at all, rendered by one panel that has no opinion about what is inside
+them.
 
-Four of M5's five exit criteria are waiting on that browser — trucks visibly moving, a manifest
-rendering correctly for all four customer types, an injected fault appearing in the exceptions panel
-within seconds, and the whole sixty-second demo path running without intervention. The fifth,
-`curl` on the SSE endpoint, passed this session.
+Three things sit in S16's way, and all three are M5 exit criteria: a manifest rendered correctly for
+all four customer types, an injected fault appearing in an exceptions panel within seconds, and the
+whole sixty-second demo path running start to finish without intervention. The API already answers
+every one of those questions — `/api/shipments/{id}` carries the manifest body untouched and
+`/api/exceptions` returns incidents flat with their shipment ids — so S16 is rendering and
+choreography rather than new plumbing.
 
-Two things S15 should know before it starts. The API's CORS origins are configured rather than
-wildcarded, and `http://localhost:5173` is already in the list, so Vite's dev server will work
-without changes. And a client is expected to load the snapshot and *then* follow the stream: the
-stream deliberately carries no history, so a reconnecting client refetches rather than asking for
-what it missed.
+Two things S16 should know before it starts. Re-running the simulator over the same shipment ids
+leaves every marker reading `DELIVERED`, because a stop arrived at and departed from is terminal:
+a clean demonstration run means stopping the tracking processor, dropping the derived collections
+(`geofence.state`, `shipment.eta`, `shipment.position`, `exception.state`, `exceptions`,
+`position.history`) and restarting it — the processor recreates the time-series collection itself.
+And the demo path wants the disrupted profile with `repeat-routes` left on, so the fleet keeps
+moving for as long as somebody is watching.
 
-S14 leaves behind: a snapshot that is polled rather than live, so a client that misses an update
-stays wrong until it refetches; a projection drift guard that fails the build for a renamed
-projection but not for a renamed writer field; and a sampling gate cleared wholesale rather than
-evicted.
+S15 leaves behind: a snapshot polled every twenty seconds rather than live, so a server conclusion
+that changes without an event to announce it is stale for up to that long; a wire contract written
+by hand on both sides, where a renamed field compiles cleanly and shows as a blank on screen; the
+5 km/h moving threshold now stated in two languages; OpenStreetMap's own tile servers as the
+basemap, which M8 must replace with a keyed style; and a single 1.2 MB bundle, nearly all of it
+MapLibre and all of it needed on first paint.
 
-Carried forward from S13: an off-route rule whose tolerance is the whole of its accuracy and which
-needs route geometry to do better; a temperature rule that cannot tell a warm trailer on a loading
-bay from a failing unit on a motorway, because a reefer reading carries no position; and a last-seen
-record held in memory, so silence detection warms up after a restart.
+Carried forward from S14: the projection drift guard still runs one way only. From S13: an off-route
+rule whose tolerance is the whole of its accuracy and which needs route geometry to do better; a
+temperature rule that cannot tell a warm trailer on a loading bay from a failing unit on a motorway,
+because a reefer reading carries no position; and a last-seen record held in memory, so silence
+detection warms up after a restart.
 
 Still nothing containerized, and that is M6's problem rather than M5's.

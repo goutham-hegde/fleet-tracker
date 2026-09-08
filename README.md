@@ -491,6 +491,53 @@ the same fact: each instance can only forward what it has itself received. Its K
 is unique **per instance** rather than shared, so two replicas do not each get half the fleet; and it
 starts from the newest offset rather than the oldest.
 
+## Dashboard
+
+The map. React, Vite and MapLibre GL against the dashboard API, and the first part of this project
+a person rather than a terminal is meant to look at.
+
+```bash
+cd dashboard
+npm install
+npm run dev            # http://localhost:5173, the origin the API already allows
+```
+
+```bash
+npm run build && npm run preview   # the built assets, on http://localhost:18080
+npm test                           # the store's update logic; no browser needed
+```
+
+Nothing needs configuring: the API's address defaults to `http://localhost:18083` and the basemap
+is OpenStreetMap raster tiles, so a checkout runs against a locally started platform as it stands.
+`.env.example` documents the two variables that change either.
+
+**Start the platform first.** With no API reachable the page loads and says so in the status bar
+rather than showing an empty map; with the API up but no simulator running it says that too, which
+is a different problem with a different fix.
+
+A marker carries four independent facts, which is what makes a fleet readable at a glance:
+
+| On the marker | Means |
+|---|---|
+| Fill colour | What the truck is doing — moving, stopped, at a stop, delivered |
+| Ring | The worst SLA exception currently open against it |
+| Fade | Nothing heard from it for ten minutes. Old, not wrong |
+| Arrow | Its heading |
+
+`stopped` and `at a stop` are the same speed and completely different situations. The difference is
+the platform's geofenced arrival rather than a threshold applied a second time in the browser, and
+it is the one distinction on this map that the dashboard could not work out for itself.
+
+Clicking a truck draws its plan: the route as booked (dashed, because a straight line between two
+stops is not a road), the geofences as filled circles at their real radii, and the trail of where it
+has actually been. The card beside it carries the live summary and names the reason when there is no
+estimate — a truck parked at a dock has none by design, and a blank would look like a fault.
+
+The page loads a snapshot and then follows the stream, which is the shape the API is built around.
+It also re-fetches the snapshot every twenty seconds and on every reconnection, because the stream
+carries no history: a browser that was away for thirty seconds has missed exactly the updates it can
+no longer ask for.
+
 ## Prerequisites
 
 | Tool | Purpose |
@@ -503,7 +550,7 @@ starts from the newest offset rather than the oldest.
 | terraform | AWS free-tier stack (M8). `winget install Hashicorp.Terraform` |
 | aws | AWS CLI (M8). `winget install Amazon.AWSCLI` |
 | mongosh | MongoDB shell, for inspecting the database by hand. `winget install MongoDB.Shell` |
-| Node 20+ | Dashboard. |
+| Node 20+ | Dashboard. Developed against Node 24 and npm 11. |
 
 `winget` updates the *user* PATH, which existing shells do not see until they
 restart. `scripts/lib.sh` adds the install directories itself so the scripts work

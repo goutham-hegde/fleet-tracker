@@ -1,0 +1,652 @@
+/*
+ * One stylesheet, hand-written.
+ *
+ * No component library and no utility framework, for the same reason the services import a BOM
+ * rather than inherit a parent: this is a dashboard with one screen, four panels and a set of
+ * markers, and a framework would be a large dependency plus a build step to style six components.
+ * The marker rules at the bottom are the load-bearing part — they are what makes a fleet legible.
+ */
+
+:root {
+  /* Movement, which is what a marker is coloured by. Not a scale: these are four different
+     situations, and a viewer must never read one as "more" than another. */
+  --moving: #0ea5e9;
+  --stopped: #f59e0b;
+  --at-stop: #22c55e;
+  --delivered: #94a3b8;
+
+  /* Severity, which is the ring around a marker rather than its fill, so a truck's state and its
+     problems are two facts on one dot instead of one fact overwriting the other. */
+  --info: #38bdf8;
+  --warning: #f59e0b;
+  --critical: #ef4444;
+
+  --ink: #0f172a;
+  --ink-soft: #475569;
+  --chrome: #0f172a;
+  --chrome-soft: #1e293b;
+  --chrome-ink: #e2e8f0;
+  --chrome-ink-soft: #94a3b8;
+  --panel: #ffffff;
+  --line: #dbe1ea;
+
+  color-scheme: light;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+
+.app-main {
+  position: relative;
+  overflow: hidden;
+}
+
+.fleet-map {
+  position: absolute;
+  inset: 0;
+}
+
+/* --- the status bar ----------------------------------------------------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.6rem 1rem;
+  background: var(--chrome);
+  color: var(--chrome-ink);
+  border-bottom: 1px solid #000;
+}
+
+.statusbar-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.statusbar-title strong {
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+}
+
+.statusbar-sub {
+  color: var(--chrome-ink-soft);
+  font-size: 0.8rem;
+}
+
+.statusbar-stats {
+  display: flex;
+  gap: 1.1rem;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.statusbar-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.statusbar-stats dt {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--chrome-ink-soft);
+}
+
+.statusbar-stats dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+}
+
+.statusbar-stats .is-alerting dd {
+  color: var(--critical);
+  font-weight: 600;
+}
+
+.statusbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.statusbar-error,
+.statusbar-empty {
+  font-size: 0.8rem;
+  max-width: 28rem;
+  text-align: right;
+}
+
+.statusbar-error {
+  color: var(--critical);
+}
+
+.statusbar-empty {
+  color: var(--chrome-ink-soft);
+}
+
+.button {
+  background: var(--chrome-soft);
+  color: var(--chrome-ink);
+  border: 1px solid #33415580;
+  border-radius: 5px;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: #334155;
+}
+
+.button-quiet {
+  background: transparent;
+  color: var(--ink-soft);
+  border: none;
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+}
+
+/* --- pills -------------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: #e2e8f0;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.pill-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pill-stream {
+  background: #1e293b;
+}
+
+.stream-open {
+  color: #4ade80;
+}
+
+.stream-connecting {
+  color: #fbbf24;
+}
+
+.stream-reconnecting {
+  color: #f87171;
+}
+
+.pill-quiet {
+  background: #eef1f6;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.pill.movement-moving {
+  background: #dbeafe;
+  color: #0c4a6e;
+}
+
+.pill.movement-stopped {
+  background: #fef3c7;
+  color: #78350f;
+}
+
+.pill.movement-at_stop {
+  background: #dcfce7;
+  color: #14532d;
+}
+
+.pill.movement-delivered {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.pill.severity-warning {
+  background: #fef3c7;
+  color: #78350f;
+}
+
+.pill.severity-critical {
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
+.pill.severity-info {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+/* --- the shipment card -------------------------------------------------- */
+
+.card {
+  position: absolute;
+  top: 0.85rem;
+  left: 0.85rem;
+  width: 22rem;
+  max-height: calc(100% - 1.7rem);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 26px rgb(15 23 42 / 18%);
+  padding: 0.85rem 0.95rem 1rem;
+  z-index: 2;
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.card-head h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-sub {
+  margin: 0.1rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.7rem 0 0.2rem;
+}
+
+.card-block {
+  margin-top: 0.9rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+
+.card-block h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+}
+
+.card-line {
+  margin: 0.25rem 0;
+  line-height: 1.45;
+}
+
+.card-muted {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.incident-list,
+.stop-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.incident-list li {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.4rem 0.5rem;
+  border-left: 3px solid var(--warning);
+  background: #f8fafc;
+  border-radius: 0 4px 4px 0;
+  margin-bottom: 0.35rem;
+}
+
+.incident-list li.severity-critical {
+  border-left-color: var(--critical);
+}
+
+.incident-list li.severity-info {
+  border-left-color: var(--info);
+}
+
+.incident-type {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.incident-detail,
+.incident-since {
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.stop-list li {
+  display: grid;
+  grid-template-columns: 1.4rem 1fr auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.28rem 0;
+  border-bottom: 1px dashed #eef1f6;
+}
+
+.stop-seq {
+  display: inline-grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.stop-list li.stop-departed .stop-seq {
+  background: var(--delivered);
+  color: #fff;
+}
+
+.stop-list li.stop-at .stop-seq {
+  background: var(--at-stop);
+  color: #fff;
+}
+
+.stop-name {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.86rem;
+}
+
+.stop-city {
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+}
+
+.stop-when {
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- the legend --------------------------------------------------------- */
+
+.legend {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  width: 19rem;
+  background: rgb(255 255 255 / 94%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  z-index: 2;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 12%);
+}
+
+.legend h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+}
+
+.legend-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.32rem;
+}
+
+.legend-list li {
+  display: grid;
+  grid-template-columns: 1rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.legend-list strong {
+  color: var(--ink);
+}
+
+.swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  background: var(--stopped);
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgb(15 23 42 / 25%);
+}
+
+.swatch.movement-moving {
+  background: var(--moving);
+}
+
+.swatch.movement-stopped {
+  background: var(--stopped);
+}
+
+.swatch.movement-at_stop {
+  background: var(--at-stop);
+}
+
+.swatch.movement-delivered {
+  background: var(--delivered);
+}
+
+.swatch-ring {
+  background: var(--moving);
+  box-shadow: 0 0 0 2.5px var(--critical);
+}
+
+.swatch-stale {
+  background: var(--moving);
+  opacity: 0.35;
+}
+
+.legend-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+/* --- markers ------------------------------------------------------------ */
+
+/*
+ * A truck marker carries four facts at once: the fill is what it is doing, the ring is the worst
+ * thing open against it, the opacity is how long ago it was heard from, and the arrow points where
+ * it is going. Nothing here transitions on position, deliberately — MapLibre moves the marker's
+ * container, and a CSS transition on top of that fights the map's own panning and lags the truck
+ * behind the road it is on.
+ */
+.truck {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 50%;
+  background: var(--stopped);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 45%);
+  cursor: pointer;
+}
+
+.truck.movement-moving {
+  background: var(--moving);
+}
+
+.truck.movement-stopped {
+  background: var(--stopped);
+}
+
+.truck.movement-at_stop {
+  background: var(--at-stop);
+}
+
+.truck.movement-delivered {
+  background: var(--delivered);
+}
+
+.truck.severity-info {
+  box-shadow: 0 0 0 2.5px var(--info), 0 1px 4px rgb(15 23 42 / 45%);
+}
+
+.truck.severity-warning {
+  box-shadow: 0 0 0 2.5px var(--warning), 0 1px 4px rgb(15 23 42 / 45%);
+}
+
+.truck.severity-critical {
+  box-shadow: 0 0 0 3px var(--critical), 0 1px 5px rgb(15 23 42 / 45%);
+}
+
+.truck.is-stale {
+  opacity: 0.4;
+}
+
+.truck.is-selected {
+  outline: 2px solid #f97316;
+  outline-offset: 2px;
+  z-index: 3;
+}
+
+/* The heading arrow: a small triangle sitting above the dot, rotated to the truck's bearing. Zero
+   degrees is north, which is what the platform's `headingDegrees` means. */
+.truck-arrow {
+  position: absolute;
+  inset: -0.55rem;
+  transform-origin: 50% 50%;
+}
+
+.truck-arrow::before {
+  content: '';
+  position: absolute;
+  top: -0.1rem;
+  left: 50%;
+  translate: -50% 0;
+  border-left: 0.28rem solid transparent;
+  border-right: 0.28rem solid transparent;
+  border-bottom: 0.42rem solid #0f172a;
+  opacity: 0.75;
+}
+
+.truck-label {
+  position: absolute;
+  top: 1.25rem;
+  left: 50%;
+  translate: -50% 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: rgb(255 255 255 / 82%);
+  border-radius: 3px;
+  padding: 0 0.2rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Sixty-four labels at country zoom overlap into a smear, so they are dropped below the zoom at
+   which they could be read. Set on the container by the map, not per marker. */
+.fleet-map.labels-hidden .truck-label {
+  display: none;
+}
+
+/* A stop in the selected shipment's plan. */
+.stop {
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.stop-dot {
+  display: grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #1d4ed8;
+  color: #1d4ed8;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.stop.stop-departed .stop-dot {
+  border-color: var(--delivered);
+  color: #475569;
+}
+
+.stop.stop-at .stop-dot {
+  border-color: var(--at-stop);
+  color: #14532d;
+}
+
+.stop-label {
+  position: absolute;
+  top: 1.15rem;
+  left: 50%;
+  translate: -50% 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #1e293b;
+  background: rgb(255 255 255 / 88%);
+  border-radius: 3px;
+  padding: 0 0.22rem;
+  white-space: nowrap;
+}
+
+/* --- narrow screens ----------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .statusbar {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  .card {
+    width: auto;
+    right: 0.85rem;
+  }
+
+  .legend {
+    display: none;
+  }
+}
