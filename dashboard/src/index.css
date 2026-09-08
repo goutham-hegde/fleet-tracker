@@ -58,9 +58,21 @@ body,
   overflow: hidden;
 }
 
-.fleet-map {
+/*
+ * Two mechanisms hold the map open, because losing its height is a silent failure: the page still
+ * renders, the markers still exist, and the bottom of the window is simply blank.
+ *
+ * MapLibre stamps `.maplibregl-map` on this element and that class sets `position: relative`. It is
+ * the same specificity as the rule below, so whichever stylesheet is imported last wins -- which is
+ * why main.tsx imports MapLibre's before ours. The explicit size is the second mechanism: even if
+ * something did override the positioning, an element told to be the full size of its parent cannot
+ * collapse to the height of a canvas that has not been sized yet.
+ */
+.app-main > .fleet-map {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 /* --- the status bar ----------------------------------------------------- */
@@ -406,7 +418,9 @@ body,
 .legend {
   position: absolute;
   right: 0.85rem;
-  bottom: 0.85rem;
+  /* Clear of the map's attribution strip along the bottom edge. OpenStreetMap's licence requires
+     that credit to be visible, so a panel may not sit on top of it. */
+  bottom: 2.3rem;
   width: 19rem;
   background: rgb(255 255 255 / 94%);
   border: 1px solid var(--line);
@@ -496,8 +510,24 @@ body,
  * container, and a CSS transition on top of that fights the map's own panning and lags the truck
  * behind the road it is on.
  */
+/*
+ * `position: absolute`, and it must stay that way.
+ *
+ * MapLibre positions a marker by writing an inline `transform` onto this element and expects it to
+ * be taken out of normal flow -- its own stylesheet says `position: absolute` for exactly that
+ * reason. This element started as `position: relative`, so that the arrow and label inside it had
+ * something to anchor to, and that quietly won the specificity tie: the markers dropped back into
+ * document flow, MapLibre's transform then offset each one from wherever it had landed, and five
+ * trucks parked at a single depot were drawn as five trucks spaced sixteen pixels apart down a
+ * road. It looks regular enough to pass for a design decision.
+ *
+ * Declared here rather than left to MapLibre's stylesheet, so that the positioning does not depend
+ * on which of the two stylesheets was imported last. `top`/`left` are pinned for the same reason.
+ */
 .truck {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
   display: grid;
   place-items: center;
   width: 1.15rem;
@@ -591,6 +621,10 @@ body,
 
 /* A stop in the selected shipment's plan. */
 .stop {
+  /* Same rule as a truck marker, and for the same reason. */
+  position: absolute;
+  top: 0;
+  left: 0;
   display: grid;
   place-items: center;
   pointer-events: none;

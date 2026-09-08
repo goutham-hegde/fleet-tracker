@@ -27,7 +27,8 @@ import {
   ScaleControl,
   type GeoJSONSource,
 } from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
+// MapLibre's own stylesheet is imported in main.tsx, deliberately before ours: it styles the
+// element we hand it, and whichever stylesheet arrives last wins. See the note there.
 import type { ShipmentDetail } from '../api/types';
 import type { FleetShipment, FleetStore, LngLat } from '../fleet/FleetStore';
 import { BASEMAP, INITIAL_VIEW } from './basemap';
@@ -421,7 +422,9 @@ function addLayers(instance: MapLibreMap): void {
 /** The DOM element behind one truck marker: an arrow that points where it is going, and a label. */
 function truckElement(shipmentId: string): HTMLDivElement {
   const element = document.createElement('div');
-  element.className = 'truck';
+  // Added, not assigned — the same rule as styleTruck. Nothing is lost here today because this
+  // runs before the marker is attached, but the two must not disagree about the rule.
+  element.classList.add('truck');
   element.innerHTML =
     '<span class="truck-arrow"></span>' +
     `<span class="truck-label">${escapeHtml(shortId(shipmentId))}</span>`;
@@ -443,18 +446,30 @@ function styleTruck(
 ): void {
   const movement = shipment.movement ?? 'STOPPED';
   const severity = shipment.worstSeverity;
-  element.className = [
-    'truck',
-    `movement-${movement.toLowerCase()}`,
-    severity ? `severity-${severity.toLowerCase()}` : '',
-    isSelected ? 'is-selected' : '',
-    // Ten minutes of the browser's own elapsed time with no news. Faded rather than hidden: a
-    // position is not wrong because it is old, it is just old, and a marker that disappeared
-    // would leave a viewer wondering where the truck went.
-    Date.now() - shipment.lastSeenWall > 600_000 ? 'is-stale' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
+
+  // `classList`, never `className`. MapLibre adds `maplibregl-marker` to the element it was
+  // handed, and that class is what positions a marker absolutely. Assigning `className` wholesale
+  // removed it, so every marker dropped back into normal document flow — while MapLibre carried on
+  // writing an inline transform for the coordinate, which then offset it from wherever it had
+  // landed in that flow. The result was a plausible map that was wrong: markers appeared at
+  // roughly the right longitude, stacked in a tidy sixteen-pixel column, so five trucks parked at
+  // one depot read as five trucks strung out down a road. Nothing errored, and the lie was regular
+  // enough to look deliberate.
+  for (const name of MOVEMENT_CLASSES) {
+    element.classList.toggle(name, name === `movement-${movement.toLowerCase()}`);
+  }
+  for (const name of SEVERITY_CLASSES) {
+    element.classList.toggle(
+      name,
+      severity != null && name === `severity-${severity.toLowerCase()}`,
+    );
+  }
+  element.classList.toggle('is-selected', isSelected);
+
+  // Ten minutes of the browser's own elapsed time with no news. Faded rather than hidden: a
+  // position is not wrong because it is old, it is just old, and a marker that disappeared would
+  // leave a viewer wondering where the truck went.
+  element.classList.toggle('is-stale', Date.now() - shipment.lastSeenWall > 600_000);
 
   const arrow = element.querySelector<HTMLElement>('.truck-arrow');
   if (arrow) {
@@ -468,6 +483,17 @@ function styleTruck(
     (shipment.speedKph != null ? ` · ${Math.round(shipment.speedKph)} km/h` : '') +
     (severity ? ` · ${severity.toLowerCase()}` : '');
 }
+
+/** Every movement class, so the one that applies is set by toggling rather than by replacing. */
+const MOVEMENT_CLASSES = [
+  'movement-moving',
+  'movement-stopped',
+  'movement-at_stop',
+  'movement-delivered',
+] as const;
+
+/** The same for severity. A marker has at most one of these and usually none. */
+const SEVERITY_CLASSES = ['severity-info', 'severity-warning', 'severity-critical'] as const;
 
 // ---------------------------------------------------------------------------
 // Small helpers

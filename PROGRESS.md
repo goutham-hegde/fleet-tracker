@@ -139,7 +139,7 @@ makes the project worth showing — everything after adds credibility, nothing a
 **Exit criteria**
 
 - [x] `curl` on the SSE endpoint streams live position and exception events
-- [ ] Trucks visibly move on the map in real time
+- [x] Trucks visibly move on the map in real time
 - [ ] Clicking a shipment renders its manifest correctly for all four customer types
 - [ ] An injected fault appears in the exceptions panel within seconds
 - [ ] The full 60-second demo path runs start to finish without intervention
@@ -1624,6 +1624,38 @@ first, because `position.history` is a time-series collection and dropping it un
 consumer is precisely the failure S10 hit; the processor recreates it explicitly at startup. Worth
 naming as a demo procedure rather than rediscovering it every time.
 
+**The map drew a fleet that was not there, and the lie was tidy enough to look deliberate.** Three
+faults, found only by driving a real browser at the page rather than by reading the code, and the
+third is the one worth remembering.
+
+The first two were plumbing. Vite pre-bundles dependencies into `node_modules/.vite/deps/`, which
+breaks MapLibre's own web worker — it is started with `new Worker(new URL(..., import.meta.url))`,
+the URL resolves inside the rewritten directory, and the worker's module was never copied there.
+One failed request, after which every tile is cancelled: the basemap never appears and the console
+shows nothing but aborted tile requests, which points at the network instead of at the bundler.
+`optimizeDeps.exclude` fixes it. The second: MapLibre stamps `.maplibregl-map` on the element it is
+given and that class sets `position: relative`, which is the same specificity as the dashboard's own
+`position: absolute; inset: 0`. Whichever stylesheet is imported last wins, and MapLibre's was — so
+the map collapsed to a third of the window with the rest of the page left blank.
+
+The third was worse, because nothing failed. Marker state was applied by assigning `className`,
+which **removed the `maplibregl-marker` class MapLibre had added** — the class that takes a marker
+out of normal document flow. Every marker fell into the flow, stacked sixteen pixels apart, while
+MapLibre carried on writing an inline transform for the real coordinate, which then offset each one
+from wherever it had landed. Five trucks parked at a single depot were drawn as five trucks strung
+out down a road, at roughly the right longitude, evenly spaced. No error, no warning, and a shape
+regular enough to read as a design decision. Fixing that unmasked a second cause of the same
+symptom: the dashboard's own `.truck { position: relative }`, added so the heading arrow had
+something to anchor to, now won against MapLibre's `absolute` — so the marker element declares its
+own positioning explicitly and no longer depends on which stylesheet loaded last.
+
+The generalisable lesson is about the check rather than the bug: every one of these produced a page
+that rendered, with live counters, moving numbers and a plausible-looking map. A build that passes,
+a linter that is clean and nineteen green tests said nothing about any of them, because the store
+was right and the drawing was wrong. **A map is verified by looking at it** — in this case with a
+headless browser reporting each marker's screen position, which is what turned "the trucks look odd"
+into "every marker is exactly sixteen pixels below the last one".
+
 ### Verified
 
 | Check | Result |
@@ -1637,11 +1669,23 @@ naming as a demo procedure rather than rediscovering it every time.
 | exception-service over that run | `raised=11 cleared=12`, one open at the end, `dlq=0` |
 | dashboard-api over that run | `positions=6124 thinned=4592 statuses=303 derived=1582 exceptions=23 unreadable=0` — 75% of positions thinned by the half-second per-shipment gate |
 | Live state a browser sees | Two trucks moving with real estimates, two inside geofences reporting `AT_A_STOP` as the reason no estimate is published — one of them at 56 km/h, which the platform still calls `AT_STOP` and the dashboard does not argue with |
+| Headless browser against the dev server (Playwright, outside the repo) | Found all three faults above; after the fixes, map container and canvas both 1440x852, no failed requests, no console errors |
+| Marker positions checked against the API's coordinates | 27 markers, zero sixteen-pixel gaps; the five loads delivered to one depot share an exact pixel, which is what an overlapping coordinate should do |
+| Trucks moving | `SHP-DEL-0021` at y=659, then y=366, then y=384 across three probes, against a live snapshot showing it MOVING at 49-59 km/h |
+| Clicking a truck | Card with badges, open incident and plan; dashed route to the next stop; three numbered stop markers with real arrival and dwell times; attribution clear of the legend |
 
 ### Left open
 
 - **The manifest is not rendered yet**, and neither is a fleet-wide exceptions panel. Both are S16,
   and both are M5 exit criteria.
+- **Delivered loads accumulate on the map and swamp it.** A run with `repeat-routes` on replaces a
+  finished truck with a fresh one, so after twenty minutes the fleet view held 21 delivered
+  shipments and 3 moving ones — and the delivered ones sit exactly on top of each other at four
+  depots, because that is where they were left. Every marker is correct; the screen is still mostly
+  history. S16 wants a filter, or a decision about how long a delivered load stays on a live map.
+- **Truck and stop labels overlap** where a truck is parked in its stop's geofence, which is most of
+  the time when it matters. No collision handling at all — DOM markers get none for free, which is
+  the cost of the trade that bought them text.
 - **The snapshot is still a poll.** Twenty seconds, plus every reconnection. A field the browser
   cannot amend from the stream is stale for up to that long — visible only where a server conclusion
   changes without an event to announce it.
@@ -1675,6 +1719,11 @@ whole sixty-second demo path running start to finish without intervention. The A
 every one of those questions — `/api/shipments/{id}` carries the manifest body untouched and
 `/api/exceptions` returns incidents flat with their shipment ids — so S16 is rendering and
 choreography rather than new plumbing.
+
+One more thing S16 should decide rather than inherit: a live map that keeps every delivered load
+on it fills with history. Twenty minutes of a repeating run left 21 delivered markers stacked on
+four depots against 3 moving trucks. Every one of them is a real shipment with a real last position,
+so this is a question about what a *live* view is for rather than a defect.
 
 Two things S16 should know before it starts. Re-running the simulator over the same shipment ids
 leaves every marker reading `DELIVERED`, because a stop arrived at and departed from is terminal:
