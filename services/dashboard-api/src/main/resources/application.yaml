@@ -1,0 +1,109 @@
+spring:
+  application:
+    name: dashboard-api
+
+  # spring.mongodb, NOT spring.data.mongodb. Spring Boot 4 moved the connection properties out of
+  # Spring Data's namespace and deprecated the old names at level "error", which means they are no
+  # longer bound -- silently, leaving the default mongodb://localhost/test in place. On this
+  # machine an unrelated mongod answers on that default, and for a read-only service the symptom is
+  # an empty map rather than an error.
+  mongodb:
+    # 37017 on the host, not 27017: an unrelated mongod owns the default port on this machine.
+    # Inside the cluster this is overridden to mongodb://mongodb.fleet.svc.cluster.local:27017.
+    uri: mongodb://localhost:37017
+    database: fleet
+
+  kafka:
+    bootstrap-servers: localhost:19092
+
+    consumer:
+      # A group per INSTANCE, not per service -- and this is the one consumer in the platform that
+      # deliberately does it. Every other service wants its work shared: the tracking processor's
+      # twelve partitions are divided among its instances so each event is stored once, which is
+      # what a shared group id buys. This service wants the opposite. Every instance must see every
+      # event, because each holds its own set of open browser connections and can only forward what
+      # it has received. Two replicas in one group would each get half the partitions, and a viewer
+      # connected to either would watch half the fleet move while the other half sat frozen.
+      #
+      # ${random.uuid} makes the group unique per process. The cost is a dead consumer group left on
+      # the broker after every restart, which Kafka expires on its own (offsets.retention.minutes,
+      # seven days by default). That is the right trade for a group whose committed offsets nothing
+      # ever reads.
+      group-id: dashboard-api-${random.uuid}
+
+      # "latest", where every other consumer in this platform uses "earliest" -- and the reasoning
+      # inverts for the same reason the group id does. A processor that skipped the retained stream
+      # would leave a hole in a history nobody could tell was there. A live stream that replayed it
+      # would open every browser with a flood of positions from hours ago, drawn on the map as
+      # though they were happening now, before catching up to the present. The snapshot endpoints
+      # are what supply history here; the stream is strictly "what has happened since you connected".
+      auto-offset-reset: latest
+
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Strings, parsed in the listener with the platform's shared mapper -- consistent with every
+      # other consumer, and it keeps an unparseable record from failing inside the framework where
+      # this service could neither count it nor ignore it.
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+      max-poll-records: 500
+
+    listener:
+      concurrency: 1
+
+      # This service commits nothing it needs and stores nothing durable, so the acknowledgement
+      # mode is about liveness rather than correctness: a batch is acknowledged once it has been
+      # offered to the subscribers.
+      ack-mode: batch
+
+      # Fail at startup if a topic is missing, rather than sitting silently on an empty stream.
+      missing-topics-fatal: true
+
+server:
+  # 18083. 18080 is the dashboard itself, 18081 the ingest gateway, 18082 the shipment service;
+  # 8080 is bound on this machine by something unrelated to this project.
+  port: 18083
+
+fleet:
+  dashboard:
+    # The same ratio the tracking processor estimates against and the simulator drives against.
+    # These three numbers are one assumption stated in three places and must move together.
+    road-circuity: 1.30
+
+    # A screen, not an export.
+    fleet-limit: 500
+
+    # Positions sent behind a marker as its trail.
+    track-limit: 300
+
+    heartbeat-interval: 30s
+
+    # Where a browser may call this from. Empty by default: the Vite dev server's origin goes here
+    # when the dashboard is being developed, and M8's real origin goes here when it is deployed.
+    # Deliberately not "*" -- a fleet's live positions are not public data, and a wildcard added for
+    # convenience in development is exactly the kind of thing that survives into a cloud deployment
+    # because nothing ever fails because of it.
+    cors-origins:
+      - http://localhost:18080
+      - http://localhost:5173
+
+    stream:
+      # How far behind one viewer may fall before its oldest pending updates are discarded. Bounded
+      # because the alternatives are both worse: an unbounded queue lets one sleeping laptop consume
+      # the heap, and a blocking one would stall the Kafka listener thread that fills it, which
+      # stops the consumer polling and drops this instance out of its own consumer group.
+      queue-capacity: 512
+
+      # A comment down an idle connection, often enough that nothing in between closes it.
+      keep-alive: 15s
+
+      max-subscribers: 64
+
+      # The shortest gap between two position updates for the same shipment. A telematics unit
+      # reports every ten seconds of simulated time, so a run at time-scale 300 produces thirty
+      # fixes a second per truck -- more than a map can draw and far more than an eye can follow.
+      # Thinned per shipment rather than globally, so a quiet truck is never delayed by a busy one.
+      sample-interval: 500ms
+
+logging:
+  level:
+    com.fleettracking: INFO

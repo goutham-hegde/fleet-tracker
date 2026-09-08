@@ -32,7 +32,15 @@ import org.springframework.data.mongodb.core.mapping.Document;
  * @param stopId the stop the estimate is for — the next one the shipment has not arrived at
  * @param estimatedArrival the last estimate published for that stop. What the next event will carry
  *     as its {@code previousEstimate}, and what the publish threshold is measured against
- * @param remainingKm road distance still to drive when that estimate was made
+ * @param remainingKm road distance still to drive <em>when that estimate was made</em>, which is
+ *     not the same thing as the distance now and is why no reader should use this field. It is only
+ *     rewritten when an estimate is published — a handful of times per leg — so a shipment five
+ *     kilometres from its stop can be carrying a document that says a hundred, under a perfectly
+ *     fresh {@code updatedAt}. Kept because it is what the publish threshold was measured against
+ *     and because an operator reading this document wants to know what the estimate was based on.
+ *     S14 settled the question for the dashboard by measuring the distance itself on every request
+ *     from the live position and the itinerary; see {@code RemainingDistance} in the dashboard API.
+ *     {@code estimatedArrival} does not have this problem and is safe to read
  * @param confidence how much the platform trusts it, 0 to 1
  * @param expectedSpeedKph the learned travel speed, in km/h: a time-decayed average of the ground
  *     speed reported while the truck was actually moving

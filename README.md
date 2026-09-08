@@ -4,7 +4,7 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** in development — milestone M0 of M9, session 3 of 24.
+> **Status:** in development — milestone M5 of M9, session 14 of 24.
 > See **[PROGRESS.md](PROGRESS.md)** for the build log, decisions taken, and what is next.
 > Architecture decision records land in `docs/adr/` as they are written.
 
@@ -29,7 +29,7 @@ This platform normalizes all of it into one stream and one live view.
 ## Layout
 
 ```
-services/       five Spring Boot services
+services/       Spring Boot services: ingest, tracking, shipments, exceptions, dashboard API
 tools/          fleet-simulator — the synthetic data source
 libs/events/    canonical event model shared by everything
 libs/reference/ scheduled stops and distance maths, shared by two consumers
@@ -73,6 +73,7 @@ by accident:
 | Dashboard | `http://localhost:18080` |
 | Ingest gateway | `http://localhost:18081` |
 | Shipment service | `http://localhost:18082` |
+| Dashboard API | `http://localhost:18083` |
 | Kafka | `localhost:19092` |
 | MongoDB (cluster) | `mongodb://localhost:37017` |
 
@@ -451,12 +452,51 @@ takes devices off the air — one problem per truck at a time, each of which res
 deliberately *not* the `chaos` profile, which damages messages instead: every message a disrupted
 run produces is perfectly formed and completely accurate, and simply describes something bad.
 
+## Dashboard API
+
+The read side. Everything above writes; this is the only component that answers questions, and the
+only one a browser talks to. It stores nothing and produces to no topic — everything it serves can
+be rebuilt from what the other four services hold.
+
+```bash
+./mvnw -pl services/dashboard-api -am package
+java -jar services/dashboard-api/target/dashboard-api-0.1.0-SNAPSHOT.jar
+```
+
+Needs the same Kafka and MongoDB as everything else, and serves on **18083**. With nothing else
+running it starts cleanly and reports an empty fleet, which is the correct answer to "no trucks are
+reporting" rather than an error.
+
+| Endpoint | Answers |
+|---|---|
+| `GET /api/shipments` | Every shipment with a known position — one marker each, with its next stop, estimate, progress and open exceptions |
+| `GET /api/shipments/{id}` | One shipment in full: the plan with what happened at each stop, the manifest, every incident, and a recent trail |
+| `GET /api/exceptions?open=true` | The exceptions panel. `open=false` includes what has already cleared |
+| `GET /api/meta` | What this service can see. The first thing to check when a map opens empty |
+| `GET /api/stream` | Server-sent events: positions, arrivals, departures, estimates and exceptions as they happen |
+
+```bash
+curl -s localhost:18083/api/shipments | jq '.[0]'
+
+# The live stream. -N matters: without it curl buffers and the stream looks dead.
+curl -N localhost:18083/api/stream
+```
+
+A client loads a snapshot and then follows the stream. The stream deliberately carries no history —
+it begins at the moment of subscription — because replaying a retained topic into a browser would
+draw hours-old positions as though they were happening now.
+
+Two things about it are the opposite of every other consumer in this platform, and both follow from
+the same fact: each instance can only forward what it has itself received. Its Kafka consumer group
+is unique **per instance** rather than shared, so two replicas do not each get half the fleet; and it
+starts from the newest offset rather than the oldest.
+
 ## Prerequisites
 
 | Tool | Purpose |
 |---|---|
 | Java 21 | Services. Maven comes via the wrapper. |
-| Docker | Runs the Kind cluster. **Allocate 10-12 GB** — 8 GB is not enough for Kafka + Mongo + five JVMs + ArgoCD. |
+| Docker | Runs the Kind cluster. **Allocate 10-12 GB** — 8 GB is not enough for Kafka + Mongo + several JVMs + ArgoCD. |
 | kubectl | Ships with Docker Desktop. |
 | kind | Local Kubernetes. `winget install Kubernetes.kind` |
 | helm | Chart installs. `winget install Helm.Helm` |

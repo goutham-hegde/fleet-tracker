@@ -19,6 +19,7 @@
     <module>services/tracking-processor</module>
     <module>services/shipment-service</module>
     <module>services/exception-service</module>
+    <module>services/dashboard-api</module>
     <module>tools/fleet-simulator</module>
   </modules>
 

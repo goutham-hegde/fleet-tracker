@@ -19,9 +19,16 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * non-daemon thread that keeps the JVM alive, which a Kafka listener does for the tracking
  * processor and which nothing would do here.
  *
- * <p>S14 adds the query API and the SSE stream the dashboard subscribes to on top of this same
- * service. What exists now is deliberately the write path and a single read by shipment: enough to
- * get a manifest in, prove it was validated, and read it back.
+ * <p>S14 considered adding the dashboard's query API and event stream here and decided against it.
+ * They went to {@code services/dashboard-api} instead, because the dashboard's questions cut across
+ * every component — where a truck is, what is wrong with it, where it is meant to go — and
+ * answering them here would have made this service the place the user interface lives while it was
+ * still the write path for customer manifests. A browser refresh and a customer's submission would
+ * then contend for the same threads and the same deployment.
+ *
+ * <p>What this service reads out is therefore still just the manifest: by shipment, by customer, by
+ * mode. The dashboard reads the same collection through its own narrow projection, and this service
+ * is not on the path of a map refresh at all.
  */
 @SpringBootApplication
 public class ShipmentServiceApplication {
