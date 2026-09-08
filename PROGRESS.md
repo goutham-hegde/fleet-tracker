@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-07 · **Current position:** M4 complete, session S13 of 24
+**Last updated:** 2026-09-08 · **Current position:** M5 in progress, session S14 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -12,12 +12,12 @@ M1 ██████████  2/2              complete
 M2 ██████████  3/3              complete
 M3 ██████████  3/3              complete
 M4 ██████████  2/2              complete
-M5 ░░░░░░░░░░  0/3              ← next
+M5 ███░░░░░░░  1/3              ← in progress
 M6 ░░░░░░░░░░  0/1
 M7 ░░░░░░░░░░  0/2
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               13/24 sessions
+               14/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -132,13 +132,13 @@ argument becomes demonstrable rather than asserted.
 **Capability:** a stranger can watch the system work, on a map, in real time. The milestone that
 makes the project worth showing — everything after adds credibility, nothing after adds viability.
 
-- [ ] **S14** — Query API + SSE stream
+- [x] **S14** — Query API + SSE stream ✅
 - [ ] **S15** — React + MapLibre map with live markers
 - [ ] **S16** — Shipment detail + exceptions panel
 
 **Exit criteria**
 
-- [ ] `curl` on the SSE endpoint streams live position and exception events
+- [x] `curl` on the SSE endpoint streams live position and exception events
 - [ ] Trucks visibly move on the map in real time
 - [ ] Clicking a shipment renders its manifest correctly for all four customer types
 - [ ] An injected fault appears in the exceptions panel within seconds
@@ -1418,20 +1418,167 @@ because there is nothing left to watch rather than because anything recovered. S
 
 ---
 
+## S14 — The read side · 2026-09-08 · M5
+
+The first session that builds something a person looks at. Everything before this writes: four feeds
+normalize into one stream, a processor turns the stream into position and arrivals and estimates, a
+service holds the paperwork, and a fourth judges all of it against what customers agreed to. Between
+them they had produced five MongoDB collections and four Kafka topics that **no human being had ever
+seen**. S14 is the component that reads them.
+
+**Built:** `services/dashboard-api`, the fifth service and the first that only reads — no MongoDB
+write, no Kafka produce, the only service in the platform with a Kafka dependency and no producer.
+Two halves. A snapshot query API (`read/`) that folds four services' collections into one marker per
+shipment, and a live event stream (`stream/`) fed by four Kafka listeners that pushes what has
+changed to every open browser over server-sent events. Serves on **18083**.
+
+| Endpoint | Answers |
+|---|---|
+| `GET /api/shipments` | Every shipment with a known position, with next stop, estimate, progress and open exceptions |
+| `GET /api/shipments/{id}` | The plan with what happened at each stop, the manifest, every incident, a recent trail |
+| `GET /api/exceptions` | The exceptions panel; `open=false` includes what has already cleared |
+| `GET /api/meta` | What the service can see — the first thing to check when a map opens empty |
+| `GET /api/stream` | Positions, arrivals, departures, estimates and exceptions as they happen |
+
+It also settled a limitation M3 left open, and fixed a defect in the event model that had been
+latent since S13 because nothing had ever been in a position to notice it.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| Where the query API and stream live | A fifth service, `dashboard-api` | Adding them to `shipment-service`, which is what the architecture diagram had said since M0. The dashboard's questions cut across every component — where a truck is, what it carries, what is wrong with it, where it is meant to go — so hanging them off the manifest service would have made it the place the user interface lives while it remained the write path for customers' order systems. A browser refresh and a manifest submission would then contend for the same threads and the same deployment. The shapes differ too: this service holds one open connection per viewer for as long as somebody watches |
+| How to read four other services' documents | A narrow projection per collection, gathered in one file, with collection names written out as strings rather than imported | Depending on the three services and reusing their records, which would compile the read-only component against three write models at once — a field promoted or renamed anywhere would rebuild and redeploy the one thing that only reads. This is S13's `MongoManifestLookup` decision at five times the scale, and the file is deliberately short enough to read in one screen: if it stops being short, the dashboard has started depending on how other services *work* rather than on what they *concluded* |
+| The stale `remainingKm` M3 left open | Measure the distance per request, from the live position and the itinerary | Writing the ETA state on every fix — a database write on the busiest path in the platform to keep a field fresh for a reader that might not exist. Also rejected: republishing an estimate on a slow heartbeat, which adds events every consumer must then ignore and weakens the property S11 was proudest of, that silence is the ETA's normal output. Measuring costs one haversine per shipment per request and needs nothing from anybody |
+| What a slow viewer costs everybody else | Nothing: a bounded queue per subscriber, a virtual thread each, and `publish` that only offers and returns | The obvious loop over a list of connections, writing to each. Writing to a socket whose receiver has stopped reading blocks once the kernel buffer fills — **on the Kafka listener thread**. A blocked listener stops polling, and a consumer that stops polling is evicted from its group, so one person closing a laptop lid silences the service for everyone. A single shared writer thread only moves the problem one step along; a platform thread per viewer costs a megabyte of stack each |
+| What a full queue does | Discards its oldest entry | Blocking (the failure above) or growing without limit (one sleeping laptop consumes the heap). A viewer who has fallen behind wants to catch up to where the trucks are now, not be walked through where they were |
+| The Kafka consumer group | Unique per **instance**, `dashboard-api-${random.uuid}` | The shared group id every other consumer here uses. Each instance can only forward what it has itself received, so two replicas sharing a group would each be handed half the partitions — and a viewer would watch half the fleet move while the other half sat frozen, with which half changing on every rebalance |
+| Where the stream starts | `latest` | `earliest`, which every other consumer uses. A processor that skipped the retained stream would leave a hole nobody could tell was there; a live stream that replayed it would open every browser with a flood of hours-old positions drawn as though they were happening now. The snapshot endpoints are what supply history |
+| What happens to a record this service cannot handle | Log it and move on | Retrying for ever, as the tracking processor and exception service both do. Nothing is lost here: a record not forwarded is a frame of a map the truck's next position has already superseded, and retrying it would stall the partition and freeze every marker on it. Nothing is dead-lettered either — that would make a read-only service a writer, and the consumer that actually needed the record is already dead-lettering it |
+| Server-sent events or WebSockets | SSE | WebSockets solve the bidirectional case and charge for it. The traffic here is entirely one-directional, because everything a person can do goes through another service's write path. SSE is plain HTTP: it works through anything, the browser reconnects on its own, and it can be read with `curl` — which is literally one of M5's exit criteria |
+| How many queries a fleet view costs | Five, regardless of fleet size | Four per truck, which for sixty-four trucks is 256 round trips per refresh per viewer. Works perfectly with three shipments in a test and falls over exactly when somebody is watching |
+| Whether to cache | No, and for a different reason than everywhere else | The three existing stores refuse a cache because they read reference data somebody else maintains. This service reads data that changes several times a second by design, and a viewer's whole reason for looking is to watch it change. A cache here would not be a trade-off, it would be the feature turned off |
+| The duplicate `type` key on exception events | Rename the domain field to `exceptionType` | Working around it in the consumer only, which leaves the trap for the archiver and every future reader. Also considered and deferred: replacing shape-sniffing with the `type` discriminator everywhere, which is more correct but revises a pattern used in two services this session was not otherwise touching |
+
+### What surprised me
+
+**An event could not be parsed the way a consumer naturally parses it, and it round-tripped anyway.**
+Every event carries a Jackson type discriminator called `type`. `ExceptionRaised` and
+`ExceptionCleared` also had a *domain* field called `type`, so the exception service was writing the
+key twice on every message: `{"type":"exception.raised", … ,"type":"TEMPERATURE_EXCURSION", …}`.
+
+It survived S13 by luck. Reading a raw string, Jackson consumes the **first** occurrence as the type
+id and binds the second to the field, so `readValue(json, ExceptionRaised.class)` works and looks
+entirely healthy — and that is exactly what the exception service's own integration test does. But
+`readTree` collapses duplicate keys and keeps the **last**, so any consumer that parses to a tree to
+work out which shape it is holding gets `TEMPERATURE_EXCURSION` as a type id and fails. Tree-then-bind
+is precisely what a shape-sniffing consumer does, and this platform has two multi-shape topics.
+
+Nothing had ever consumed `exceptions.v1`, so nobody had been in a position to find it. The first
+consumer it ever had found it within minutes. The field is now `exceptionType`; the blast radius was
+one producer, one consumer and no committed fixtures.
+
+**The stale field was not stale in any way the document admitted to.** The demonstration is better
+than the argument. A truck parked at its Hosur customer stop had this in `shipment.eta`:
+
+```
+{ _id: 'SHP-BLR-0003', stopId: 'hsr-cust', remainingKm: 0.434 }
+```
+
+Which is true, and useless: it describes the stop the truck is *standing in*. The honest answer to
+"how far to where this truck is going next" is **185.98 km**, and the dashboard measures it per
+request. What makes this worth recording is that the document is not detectably wrong — its
+`updatedAt` is perfectly accurate about when a number that is now misleading was written.
+
+**A test that counts is not a test that checks.** `/api/exceptions` returned every incident without a
+`shipmentId` on any of them — fine nested inside a shipment summary, where the context is implied,
+and meaningless in the flat list an exceptions panel reads, which could not have linked a row to a
+truck. The integration test asserted how many incidents came back and never looked inside one, so it
+passed. It was found by querying the running service by hand. The test now asserts content.
+
+**Reading another service's documents is not the same as reading documents shaped like them.** Spring
+Data stamps every document it writes with a `_class` naming the writing class —
+`com.fleettracking.tracking.eta.EtaState`, `com.fleettracking.exceptions.incident.Incident` — none of
+which exist on this service's classpath. The integration test seeded raw BSON with no `_class` at
+all, so that path was never exercised by any test; it was only ever going to be settled by pointing
+the service at the real database. It reads them correctly, but that was a fact to confirm rather than
+assume.
+
+**A connection that never ends will also never let a JVM exit.** The integration test opened SSE
+streams and walked away, which is the correct thing for a stream test to do and left the client
+reading for ever. The tests passed, the forked JVM then refused to exit, and Failsafe killed it
+thirty seconds after `System.exit` with an error naming neither the test nor the stream. Thirty
+seconds on every build, for a connection nobody closed.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `./mvnw verify` | All nine modules green, exit 0 — **462 unit and 84 integration tests** |
+| New module's own tests | 32 unit + 9 integration, all green |
+| The `exceptionType` rename | `ExceptionServiceIT`'s 12 integration tests still pass; construction is positional, so the producer was untouched and only three accessor call sites changed |
+| Stale Surefire report | A report from a deleted throwaway test was inflating the count by one, exactly as the conventions warn. Removed; 462 is after removing it |
+| Fleet view against **real** S13-written documents | 4 shipments, joined out of `shipment.position`, `geofence.state`, `shipment.eta`, `exceptions`, `manifests` and `itinerary` — documents written by three other services, read through projections, with their `_class` hints naming classes this service does not have |
+| The stale-distance fix, on live data | Stored `remainingKm` for `SHP-BLR-0003` was **0.434** — the stop it was parked in. The dashboard reported **185.98 km** to the stop it was actually driving to, and `estimatePending: AT_A_STOP` rather than showing a stale estimate |
+| Detail endpoint, polymorphic body | MediVault's cold-chain manifest came back untouched: `drugLicenceNo`, `temperature {minC: 2, maxC: 8, excursionToleranceMinutes: 30}`, `consignment`, `custody` — fields no other customer has and this service knows nothing about |
+| Plan folded with what happened | `hyd-genome DEPARTED (dwell 6000s)`, `knl-clinic PENDING`, `blr-hosp PENDING`, plus 300 trail points |
+| **`curl -N` on the SSE endpoint** — M5 exit criterion | A five-minute capture during a live disrupted run carried **483 events**: 249 `position`, 170 `estimate`, 50 `status`, 6 `arrived`, 6 `departed`, 1 `exception.raised`, 1 `exception.cleared` |
+| A raise and its clear pair on the stream | Both carried `exceptionId: 40c0a612-2384-33be-a354-f5a93188416d` — raised `15 km off the planned route for 15 minutes` (observed 14.87 against a 12.0 km corridor), cleared 2220 s later with `BACK_ON_ROUTE` |
+| The raw payload is not forwarded | No `raw` field on any streamed event; a position update carries vehicle, coordinates, speed, heading, accuracy and source and nothing else |
+| Exception events parse | `exceptions=7 unreadable=0` in the dashboard heartbeat — before the `exceptionType` rename all seven would have been unreadable |
+| Position thinning under load | `positions=2569 thinned=1933` — 75% suppressed, so a viewer sees about two updates per shipment per second instead of the firehose |
+| Nothing dropped | `viewers=1 published=1416 delivered=1416 dropped=0 refused=0` across the whole run |
+| Rest of the platform during that run | tracking processor `stored=2470 duplicates=12 dlq=0`, `arrivals=9 departures=8 unplanned=0`, `etas=585/2470 (24%)`; exception service `raised=3 cleared=3 dlq=0` |
+| Exceptions endpoint after the fix | 5 incidents, 2 open and 3 cleared, **each naming its shipment** |
+| Build exit delay | Gone: module `verify` back to 1m13s, with no `kill self fork JVM` error |
+
+The live run was stopped after roughly 2,500 messages in order to rebuild with the `shipmentId` fix,
+so it did not run its lanes to completion. Every figure above is from that run as far as it got.
+
+### Left open
+
+- **Nothing draws a map yet.** That is S15 — React and MapLibre against this API. Four of M5's five
+  exit criteria remain, and all four need a browser.
+- **The snapshot is a poll, not a live query.** A client that misses a stream update stays wrong
+  until it refetches. Acceptable for a dashboard that reloads on a timer; worth naming.
+- **The projection drift guard runs one way only.** The integration test seeds documents with the
+  writers' field names, so a renamed *projection* fails the build — but a renamed *writer* field does
+  not, and would only be caught by running the platform. That is how the `_class` question was
+  settled, and it is not a build-time check.
+- **The sampling gate is cleared wholesale** rather than evicted least-recently-used. Harmless at
+  fleet scale; the only cost is one extra frame per shipment after a clear.
+- Carried forward from S13: the corridor still cannot tell "left the road" from "went somewhere
+  else"; a reefer reading still carries no position; the last-seen map is still in memory. Still
+  nothing containerized, which is M6's problem.
+
+---
+
 ## Next up
 
-**S14 — the live map**, the first session of M5 and the one that makes everything built so far
-visible to somebody who was not here. Position, geofence state, arrival estimates and now SLA
-exceptions all exist as documents and events; none of them has ever been looked at by a person.
+**S15 — the map itself.** The API now answers every question a live map asks and pushes every change
+as it happens; nothing draws any of it. S15 is React, Vite and MapLibre GL against
+`http://localhost:18083`: load `/api/shipments` for the state of the world, open `/api/stream`, and
+move the markers as updates arrive.
 
-Before the dashboard reads the estimate, the stale `remainingKm` has to be fixed — the field is only
-written when something is published, so a shipment five kilometres from its stop can hold a value of
-a hundred. Either publish on a slow heartbeat as well as on change, or write per fix.
+Four of M5's five exit criteria are waiting on that browser — trucks visibly moving, a manifest
+rendering correctly for all four customer types, an injected fault appearing in the exceptions panel
+within seconds, and the whole sixty-second demo path running without intervention. The fifth,
+`curl` on the SSE endpoint, passed this session.
 
-S13 leaves behind: an off-route rule whose tolerance is the whole of its accuracy and which needs
-route geometry to do better; a temperature rule that cannot tell a warm trailer on a loading bay
-from a failing unit on a motorway, because a reefer reading carries no position; a last-seen record
-held in memory, so silence detection warms up after a restart; and nothing yet reading the
-exceptions collection.
+Two things S15 should know before it starts. The API's CORS origins are configured rather than
+wildcarded, and `http://localhost:5173` is already in the list, so Vite's dev server will work
+without changes. And a client is expected to load the snapshot and *then* follow the stream: the
+stream deliberately carries no history, so a reconnecting client refetches rather than asking for
+what it missed.
+
+S14 leaves behind: a snapshot that is polled rather than live, so a client that misses an update
+stays wrong until it refetches; a projection drift guard that fails the build for a renamed
+projection but not for a renamed writer field; and a sampling gate cleared wholesale rather than
+evicted.
+
+Carried forward from S13: an off-route rule whose tolerance is the whole of its accuracy and which
+needs route geometry to do better; a temperature rule that cannot tell a warm trailer on a loading
+bay from a failing unit on a motorway, because a reefer reading carries no position; and a last-seen
+record held in memory, so silence detection warms up after a restart.
 
 Still nothing containerized, and that is M6's problem rather than M5's.
