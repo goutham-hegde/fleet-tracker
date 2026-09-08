@@ -17,6 +17,9 @@ import java.time.Instant;
  * @param exceptionId the same id the {@link ExceptionRaised} carried. This is the join.
  * @param raisedAt when the incident opened, repeated here so a consumer that missed the raise —
  *     or joined the topic after it — can still render a complete incident.
+ * @param exceptionType which rule fired. Named {@code exceptionType} rather than {@code type} for
+ *     the reason set out on {@link ExceptionRaised}: {@link Event} already uses {@code type} as its
+ *     polymorphic discriminator, and a component of the same name puts the key on the wire twice.
  * @param openFor {@code occurredAt} minus {@code raisedAt}, computed once so that every consumer
  *     agrees on how long the shipment was in breach.
  * @param resolution how it ended: the condition genuinely recovered, or the shipment was delivered
@@ -30,7 +33,7 @@ public record ExceptionCleared(
     @NotNull Instant occurredAt,
     @NotBlank String causedBy,
     @NotBlank String exceptionId,
-    @NotNull ExceptionType type,
+    @NotNull ExceptionType exceptionType,
     @NotNull Instant raisedAt,
     @NotNull Duration openFor,
     String resolution)

@@ -637,13 +637,13 @@ class ExceptionServiceIT {
 
   private List<ExceptionRaised> raisedFor(ExceptionType type) {
     return exceptionsOf(ExceptionRaised.class).stream()
-        .filter(e -> e.type() == type)
+        .filter(e -> e.exceptionType() == type)
         .toList();
   }
 
   private List<ExceptionCleared> clearedFor(ExceptionType type) {
     return exceptionsOf(ExceptionCleared.class).stream()
-        .filter(e -> e.type() == type)
+        .filter(e -> e.exceptionType() == type)
         .toList();
   }
 

@@ -8,6 +8,14 @@ import java.time.Instant;
 /**
  * An SLA rule fired: something about this shipment is now wrong.
  *
+ * @param exceptionType which rule fired. Named {@code exceptionType} rather than {@code type},
+ *     which is what it obviously wants to be called, because {@link Event} already uses
+ *     {@code type} as its polymorphic discriminator — so a component of that name serializes the
+ *     key twice, with the discriminator first and the rule second. That round-trips by accident:
+ *     Jackson reads the type id from the first occurrence while streaming, so
+ *     {@code readValue(json, ExceptionRaised.class)} works, and a consumer that parses to a tree
+ *     first gets the <em>last</em> occurrence instead and fails with an invalid type id. Found in
+ *     S14 by the first consumer this topic ever had.
  * @param exceptionId identity of the <em>incident</em>, not of this message. The matching
  *     {@link ExceptionCleared} repeats it, and that pairing is the whole reason exceptions are
  *     modelled as two events instead of one boolean flag. A rule that keeps firing while a
@@ -26,7 +34,7 @@ public record ExceptionRaised(
     @NotNull Instant occurredAt,
     @NotBlank String causedBy,
     @NotBlank String exceptionId,
-    @NotNull ExceptionType type,
+    @NotNull ExceptionType exceptionType,
     @NotNull Severity severity,
     @NotBlank String detail,
     String stopId,
