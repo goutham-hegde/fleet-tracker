@@ -61,8 +61,12 @@ public final class EventJson {
         .disable(
             DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS,
             DateTimeFeature.WRITE_DURATIONS_AS_TIMESTAMPS)
+        // DELIBERATELY WRONG. This branch exists to prove that the pipeline stops a bad change
+        // from reaching main; it is never merged. Writing nulls is a real regression -- every
+        // event on every topic grows a handful of explicit nulls -- and EventRoundTripTest
+        // catches it.
         .changeDefaultPropertyInclusion(
-            incl -> incl.withValueInclusion(JsonInclude.Include.NON_NULL))
+            incl -> incl.withValueInclusion(JsonInclude.Include.ALWAYS))
         .build();
   }
 }
