@@ -35,6 +35,18 @@ RUN npm run build
 # has no business being root to do it.
 FROM nginxinc/nginx-unprivileged:1.29-alpine
 
+# The commit this image was built from, supplied by CI. Empty on a laptop build, deliberately: the
+# working tree it came from may never be committed.
+ARG REVISION=""
+
+# The same OCI annotations the five Jib-built images carry, stated here because there is no POM in
+# this build. `image.source` is the one that does work rather than describing: ghcr.io reads it and
+# links the published package back to this repository, which is what gives the package an owner and
+# the repository's visibility rules instead of arriving orphaned.
+LABEL org.opencontainers.image.source="https://github.com/goutham-hegde/fleet-tracker" \
+      org.opencontainers.image.title="dashboard" \
+      org.opencontainers.image.revision="$REVISION"
+
 COPY --chown=nginx:nginx nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build --chown=nginx:nginx /build/dist /usr/share/nginx/html
 

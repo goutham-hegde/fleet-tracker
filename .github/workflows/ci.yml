@@ -1,0 +1,242 @@
+# What runs on every change, before anybody is asked to look at it.
+#
+# The build already knows how to test itself and how to produce images; until now nothing did
+# either of those on anybody's behalf. This workflow is the "somebody" -- it runs on a machine
+# that has never seen this project, from a clean checkout, which is the only honest test of
+# whether the repository is self-contained.
+#
+# Three jobs, deliberately separate rather than one long script. They have nothing to say to each
+# other, they fail for unrelated reasons, and a failure that names "Dashboard" is worth more than
+# a failure at line 340 of a build log. They also run in parallel, so the wall-clock cost is the
+# slowest one rather than the sum.
+name: CI
+
+on:
+  # Every pull request, whatever its target branch. This is the run that gates a merge.
+  pull_request:
+  # And every push to main, so the state of the default branch is always known -- a branch can go
+  # red without any pull request being involved (a direct push, or two PRs that were each green
+  # alone and conflict in behaviour once both are in).
+  push:
+    branches: [main]
+
+# One run per branch. A second push while the first run is still going makes the first result
+# obsolete, and paying for an answer about a commit nobody will merge is waste -- but only for
+# pull requests. A push to main is cancelled by nothing, because its run is what the publish
+# workflow keys off and an interrupted history of main is a history with holes in it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege, stated rather than inherited. This workflow reads the repository and writes
+# nothing at all; the token it is handed can therefore do nothing else, whatever a compromised
+# dependency might try during a build. The publish workflow next door asks for more, and asks for
+# it explicitly.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  # The Java side: unit tests, then integration tests against a real broker and a real database.
+  # ---------------------------------------------------------------------------------------------
+  build:
+    name: Java build and tests
+    runs-on: ubuntu-latest
+    # Generous but finite. The integration tests start containers and wait on brokers, so a
+    # network stall can leave a job apparently alive with nothing happening; without a limit that
+    # burns six hours before GitHub gives up.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          # Caches ~/.m2/repository keyed by the POM files. A cold run downloads some 300 MB of
+          # Spring, Kafka and Testcontainers jars; a warm one downloads almost nothing.
+          cache: maven
+
+      # `verify` rather than `test`, and that is the whole point of this job. `test` runs the
+      # *Test classes only. `verify` additionally runs the *IT classes under Failsafe, and those
+      # start a real Kafka and a real MongoDB in containers through Testcontainers -- which is why
+      # this needs a Docker daemon and why GitHub's Ubuntu runners are the right machine: they
+      # ship with one already running, so nothing here installs or configures Docker.
+      #
+      # -B is batch mode (no ANSI progress spinner, which in a log file is thousands of lines of
+      # carriage returns) and -ntp suppresses the per-artifact download chatter.
+      - name: mvnw verify
+        run: ./mvnw -B -ntp verify
+
+      # Only on failure, and only the reports. A green run has nothing to look at; a red one is
+      # usually diagnosed from the surefire/failsafe XML rather than from the console tail, which
+      # truncates the stack trace that matters.
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '**/target/*-reports/'
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------------------------
+  # The dashboard: the only part of this repository that is not Java, and it has its own gates.
+  # ---------------------------------------------------------------------------------------------
+  dashboard:
+    name: Dashboard build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          # The lockfile is not at the repository root, so the cache action has to be told where
+          # to find it; without this it reports that no lockfile was found and caches nothing.
+          cache-dependency-path: dashboard/package-lock.json
+
+      # `npm ci`, never `npm install`. It installs exactly what the lockfile states and fails if
+      # the lockfile and package.json disagree, where `install` would quietly resolve something
+      # newer and rewrite the lockfile -- so CI would be testing a dependency tree that exists
+      # nowhere else. The same reasoning as in the dashboard's Dockerfile.
+      - run: npm ci
+
+      - run: npm run lint
+
+      # The store's update logic: 19 tests, no browser needed.
+      - run: npm test
+
+      # `npm run build` is `tsc -b && vite build`, so this is also the typecheck. A type error
+      # fails here rather than shipping a bundle that throws in somebody's browser.
+      - run: npm run build
+
+  # ---------------------------------------------------------------------------------------------
+  # The manifests. Not a deployment -- a check that the description of one still assembles.
+  # ---------------------------------------------------------------------------------------------
+  manifests:
+    name: Kustomize overlays render
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # kustomize is a template-free layering engine: the overlay names a base, some patches and
+      # some resources, and `kubectl kustomize` resolves the lot into the YAML that would actually
+      # be sent to a cluster. Almost every way of breaking these files -- a resource listed but
+      # not present, a patch whose target matches nothing, a duplicated name -- fails here, in
+      # five seconds, with no cluster involved.
+      #
+      # What this does NOT do is validate the result against the Kubernetes API. That needs either
+      # a cluster or a downloaded schema set, and a `kubectl apply --dry-run=server` cannot run
+      # here at all: the fleet namespace is created by the same apply, so a server dry run on a
+      # clean cluster reports `namespaces "fleet" not found` and looks like a manifest error.
+      - name: Render the platform layer
+        run: kubectl kustomize deploy/base/platform > /dev/null
+
+      - name: Render the services layer
+        run: kubectl kustomize deploy/base/services > /dev/null
+
+      - name: Render the local overlay
+        run: kubectl kustomize deploy/overlays/local > /dev/null
+
+  # ---------------------------------------------------------------------------------------------
+  # Publishing. Only from main, and only behind the three jobs above.
+  # ---------------------------------------------------------------------------------------------
+  #
+  # This lives in the same workflow as the tests rather than in a file of its own, and that is the
+  # gate. `needs` is a hard dependency: if any one of the three fails or is cancelled, this job
+  # never starts, so a broken test cannot produce an image. A separate workflow would have to watch
+  # this one finish and then decide for itself, which is the same rule written twice in a place
+  # where the two copies can disagree.
+  publish:
+    name: Publish images to ghcr.io
+    needs: [build, dashboard, manifests]
+    # A pull request from a fork cannot be allowed to push images, and `push` to main is the only
+    # event that means "this is now the truth". The ref check is belt and braces -- the trigger
+    # above already restricts pushes to main -- but it costs nothing and it survives somebody
+    # adding a branch to that list later.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # More than the workflow's default, asked for here rather than at the top so that the three
+    # test jobs keep a token that can do nothing but read. `packages: write` is what lets the
+    # automatically-provided GITHUB_TOKEN push to ghcr.io -- there is no stored registry password
+    # anywhere in this repository, and there should never be one.
+    #
+    # This is a ceiling, not a grant: if the repository's Settings > Actions > Workflow permissions
+    # is set to read-only, this line cannot raise it and every push fails with a 403 denied.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Writes ~/.docker/config.json. Jib reads that same file, which is why the Maven step below
+      # states no credentials of its own; and `docker push` for the dashboard uses it directly.
+      # github.actor is whoever pushed; the token is scoped to this repository and expires when the
+      # job ends.
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Six images -- the five services and the simulator -- pushed straight to the registry with
+      # no Docker daemon involved. Tests are skipped because the build job has already run them
+      # against this exact commit; running them again would double the wall clock to learn nothing.
+      #
+      # The tag is the full commit SHA, which is the whole point. A tag like `latest` cannot be
+      # rolled back to and cannot answer "what is actually running", because two machines can hold
+      # different images under it. A SHA names exactly one commit, so a running pod's image
+      # reference is a link into the history of this repository.
+      - name: Build and push the JVM images
+        run: >
+          ./mvnw -B -ntp -Ppublish -DskipTests package
+          -Dimage.tag=${{ github.sha }}
+          -Dimage.revision=${{ github.sha }}
+
+      # The dashboard is the one image Jib cannot build: no JVM, no main class, just static files
+      # and an nginx. It has a Dockerfile, so it is an ordinary docker build -- and this job does
+      # have a daemon available, it simply does not need one for the other six.
+      - name: Build and push the dashboard image
+        run: |
+          docker build \
+            --build-arg REVISION=${{ github.sha }} \
+            -t ghcr.io/goutham-hegde/fleet-tracker/dashboard:${{ github.sha }} \
+            dashboard
+          docker push ghcr.io/goutham-hegde/fleet-tracker/dashboard:${{ github.sha }}
+
+      # A run summary is the answer to "what did this produce", visible on the run page without
+      # opening a log. S19 consumes exactly these references.
+      - name: Summarise what was published
+        run: |
+          {
+            echo "### Published to ghcr.io"
+            echo
+            echo "Tag: \`${{ github.sha }}\`"
+            echo
+            for image in ingest-gateway tracking-processor shipment-service \
+                         exception-service dashboard-api fleet-simulator dashboard; do
+              echo "- \`ghcr.io/goutham-hegde/fleet-tracker/$image:${{ github.sha }}\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

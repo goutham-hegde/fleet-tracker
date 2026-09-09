@@ -46,6 +46,14 @@
          rollback has nothing to roll back to. M7 replaces this with the commit SHA. -->
     <image.tag>${project.version}</image.tag>
 
+    <!-- The commit an image was built from, stamped into it as an OCI label. Empty by default and
+         overridden by CI with the SHA. It reads `local` off CI rather than being left empty, for
+         two reasons: a laptop build genuinely has no commit to claim, because the working tree it
+         built from may never be committed; and an empty XML element reaches a plugin as a null
+         rather than as an empty string, which is the sort of thing that fails inside a plugin
+         rather than in the build it configures. -->
+    <image.revision>local</image.revision>
+
     <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.5.2</maven-failsafe-plugin.version>
@@ -162,6 +170,18 @@
                    what is running. The cost is cosmetic: `docker images` reports every image as
                    55 years old, because the fixed instant is the Unix epoch. -->
               <creationTime>EPOCH</creationTime>
+              <!-- Open Container Initiative annotations. `image.source` is the one that does real
+                   work: ghcr.io reads it and links the published package to this repository, which
+                   is what gives the package a README, an owner and the repository's own visibility
+                   rules. Without it a package arrives at ghcr.io orphaned, and the only way to say
+                   which commit produced it is to remember. `image.revision` is the commit, passed
+                   in by CI; locally it is empty, which is honest : a laptop build has no commit
+                   behind it because the working tree may not be committed at all. -->
+              <labels>
+                <org.opencontainers.image.source>https://github.com/goutham-hegde/fleet-tracker</org.opencontainers.image.source>
+                <org.opencontainers.image.title>${project.artifactId}</org.opencontainers.image.title>
+                <org.opencontainers.image.revision>${image.revision}</org.opencontainers.image.revision>
+              </labels>
             </container>
           </configuration>
         </plugin>
@@ -239,6 +259,45 @@
                   <phase>package</phase>
                   <goals>
                     <goal>dockerBuild</goal>
+                  </goals>
+                </execution>
+              </executions>
+            </plugin>
+          </plugins>
+        </pluginManagement>
+      </build>
+    </profile>
+
+    <!-- Container images, pushed to a registry: ./mvnw -Ppublish -DskipTests package
+         -Dimage.tag=<sha>. This is what CI runs on a merge to main and it is the only difference
+         between a laptop build and a published one : the same POM, the same base image, the same
+         JVM flags, one different goal.
+
+         `build` rather than `dockerBuild`. dockerBuild hands the finished image to a local Docker
+         daemon; build assembles the layers and pushes them straight to the registry over HTTPS,
+         with no daemon involved anywhere. That is why the images job in CI is an ordinary Maven
+         run rather than a privileged one, and it is most of the reason this project uses Jib at
+         all : a Dockerfile per service would need a daemon, a build context and a Docker login
+         inside the job for each of them.
+
+         Credentials are not stated here and must not be. Jib reads the same ~/.docker/config.json
+         that `docker login` writes, so CI logs in once with the token GitHub hands the job and Jib
+         finds it. A username and password in this file would be a secret in a public repository.
+    -->
+    <profile>
+      <id>publish</id>
+      <build>
+        <pluginManagement>
+          <plugins>
+            <plugin>
+              <groupId>com.google.cloud.tools</groupId>
+              <artifactId>jib-maven-plugin</artifactId>
+              <executions>
+                <execution>
+                  <id>push-image</id>
+                  <phase>package</phase>
+                  <goals>
+                    <goal>build</goal>
                   </goals>
                 </execution>
               </executions>
