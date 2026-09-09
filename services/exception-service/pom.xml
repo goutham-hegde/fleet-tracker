@@ -32,10 +32,12 @@
       <version>${project.version}</version>
     </dependency>
 
-    <!-- No HTTP surface. Kept alive by the Kafka listener containers' own threads. -->
+    <!-- starter-web, and only so that the actuator probes have somewhere to answer : nothing
+         calls this service, and there is no controller in the module. Same reasoning as the
+         tracking processor, which made the same change in S17 for the same reason. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter</artifactId>
+      <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
 
     <dependency>
@@ -46,6 +48,15 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-mongodb</artifactId>
+    </dependency>
+
+    <!-- Health, liveness and readiness over HTTP. Kubernetes decides whether to restart a
+         container and whether to send it traffic by asking it, and an answer of "the process
+         exists" is not the same answer as "the application works". Actuator supplies both, as
+         two separate endpoints with two separate meanings. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
     <dependency>
@@ -97,6 +108,13 @@
             </goals>
           </execution>
         </executions>
+      </plugin>
+
+      <!-- Container image. All configuration is in the parent's pluginManagement so that five
+           service images cannot drift apart; this module only opts in. -->
+      <plugin>
+        <groupId>com.google.cloud.tools</groupId>
+        <artifactId>jib-maven-plugin</artifactId>
       </plugin>
     </plugins>
   </build>

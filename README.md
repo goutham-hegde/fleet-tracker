@@ -88,8 +88,10 @@ Kafka and MongoDB run inside the cluster, in the `fleet` namespace.
 ./scripts/platform-down.sh  # delete the namespace -- DESTROYS all Kafka and Mongo data
 ```
 
-`platform-up.sh` is a wrapper around `kubectl apply -k deploy/base` that also waits for both
-readiness probes and for the topic-creation Job. Kafka and MongoDB together add roughly **625 MB**
+`platform-up.sh` is a wrapper around `kubectl apply -k deploy/base/platform` that also waits for
+both readiness probes and for the topic-creation Job. It deploys Kafka and MongoDB and nothing
+else: the manifests are split into a durable half (`deploy/base/platform`) and a disposable half
+(`deploy/base/services`) precisely so that this script cannot touch the second one. Kafka and MongoDB together add roughly **625 MB**
 on top of the idle cluster.
 
 To free memory between sessions use `cluster-stop.sh`, not `platform-down.sh` — stopping the
@@ -562,9 +564,116 @@ It also re-fetches the snapshot every twenty seconds and on every reconnection, 
 carries no history: a browser that was away for thirty seconds has missed exactly the updates it can
 no longer ask for.
 
-## The demo path
+## Running it in the cluster
 
-Everything above, in one command, from a stopped platform to trucks moving on a map.
+Everything above runs the services as jars on the host, against a Kafka and a MongoDB inside Kind.
+They can also run *as pods*, which is what the manifests in `deploy/` describe and what the one
+command below applies.
+
+```bash
+./scripts/stack-up.sh         # cluster, platform, KEDA, images, seed data, deploy. ~5.5 min
+```
+
+The step it exists to make possible is the last one:
+
+```bash
+kubectl apply -k deploy/overlays/local
+```
+
+Twelve pods, ready in about half a minute on a warm cluster: Kafka, MongoDB, the five services, the
+dashboard, and a simulated fleet. Every service answers on exactly the port it always has, because
+the Kind cluster forwards 18081, 18082 and 18083 to the node in the same way it has forwarded
+18080, 19092 and 37017 since M0.
+
+```bash
+kubectl get pods -n fleet
+kubectl get hpa -n fleet -w        # the autoscaler, live
+kubectl logs -n fleet deployment/tracking-processor -f
+kubectl delete -k deploy/overlays/local    # remove the workloads; Kafka and Mongo data survive
+```
+
+### How the images are built
+
+The five Java services are built by **Jib**, a Maven plugin that assembles an image from the
+compiled classes with no Dockerfile and no Docker daemon of its own. All of its configuration lives
+once in the root POM, so the five images cannot drift apart in base layer, JVM flags or user; a
+service module declares the plugin and states nothing. The dashboard is the exception — static
+files and an nginx, with no main class to point Jib at — so it has a two-stage Dockerfile.
+
+```bash
+./scripts/images.sh    # build all seven, then load them into the Kind node
+```
+
+`kind load` is the part that is easy to forget. Kind runs Kubernetes inside a container with its own
+image store, so an image sitting in the host's Docker daemon is invisible to it. The local overlay
+sets `imagePullPolicy: Never` for exactly this reason: a forgotten load then fails immediately with
+`ErrImageNeverPull`, instead of spending a minute trying to pull from a registry that has nothing to
+do with the mistake.
+
+Images are tagged `0.1.0-SNAPSHOT` and nothing produces `latest`. A moving tag is the wrong thing
+for a cluster to hold — two nodes can disagree about what it means, and a rollback has nothing to
+roll back to.
+
+### Probes
+
+Every workload answers two questions, and they are deliberately different questions.
+
+| Probe | Endpoint | Contains |
+|---|---|---|
+| liveness | `/actuator/health/liveness` | the application's own state, and nothing external |
+| readiness | `/actuator/health/readiness` | that, plus MongoDB |
+
+Liveness decides whether to *restart* a container; readiness decides whether to *send it traffic*.
+Answering both with one number is the classic way to turn a slow database into an outage: the
+combined check fails, every pod is restarted at once, and the restart storm outlasts the blip.
+
+The ingest gateway is the case that shows why readiness includes the database. Without MongoDB it
+still parses and still answers — but identity resolution fails for every message, so all four feeds
+are dead-lettered as unresolvable while the service reports itself in perfect health. A service that
+cheerfully rejects everything it is sent is worse than one that is plainly out of rotation.
+
+Both Kafka consumers gained an HTTP port for this and have no endpoints on it. A container with no
+port can only be probed by running a command inside it, which establishes that a JVM exists and
+nothing whatever about whether it is still consuming.
+
+### Autoscaling on consumer lag
+
+`tracking-processor` scales on **Kafka consumer lag** — how many records the group has not read yet.
+That is the honest measure of whether a consumer is keeping up: one at 20% CPU that is 400,000
+records behind is failing, and one at 90% CPU three records behind is fine.
+
+Kubernetes cannot see that number; its built-in autoscaler reads CPU and memory. **KEDA** is the
+piece that closes the gap — an operator that polls Kafka's own consumer-group offsets and feeds the
+answer to an otherwise ordinary HorizontalPodAutoscaler that it creates and owns.
+
+```bash
+./scripts/keda-up.sh               # install the operator (pinned version)
+kubectl get scaledobject,hpa -n fleet
+```
+
+The rule is in `deploy/overlays/local/tracking-processor-scaledobject.yaml`: 500 records of lag per
+pod, one replica minimum, four maximum. Four rather than more has two separate ceilings behind it —
+the topic has 12 partitions and a partition has exactly one consumer per group, so a thirteenth pod
+would idle for ever whatever the lag said; and this is a laptop.
+
+Measured, under six simulators pushing far more than the demo does:
+
+| | lag | replicas |
+|---|---|---|
+| 09:49:22 | 467 | 1 |
+| 09:49:58 | 4,265 | 3 |
+| 09:51:11 | 8,909 | 4 |
+
+Worth knowing: a *burst* does not scale anything. A 2,880-record backlog was cleared by the single
+running pod before the autoscaler's loop came round, which is the correct outcome — scaling out to
+meet a backlog that has already gone would be pure churn, since removing a consumer again forces a
+group rebalance.
+
+## The demo path, without containers
+
+The same platform, brought up as jars on the host rather than as pods. Kept because it is the
+faster loop when a service is being *changed* — an edit and a restart, with no image build and
+no rollout in between — and because it is what M5 was demonstrated with.
 
 ```bash
 ./scripts/cluster-start.sh    # if the cluster is stopped

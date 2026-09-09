@@ -1,0 +1,167 @@
+# The dashboard API: the only service a browser talks to, and the only one that never writes.
+#
+# Two halves: a snapshot query API that folds four services' collections into one marker per
+# shipment, and an SSE stream fed by four Kafka listeners. It writes nothing -- no Mongo write,
+# no Kafka produce -- so everything it serves could be thrown away and rebuilt from what the
+# other four services hold.
+#
+# It holds one open connection per viewer, which is why its consumer group is unique per process
+# and why running two replicas would be wrong rather than merely wasteful: each instance can only
+# forward what it has itself received, so two replicas sharing a group would each be handed half
+# the partitions and a viewer would watch half the fleet move and half sit frozen.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-api
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: dashboard-api
+    app.kubernetes.io/part-of: fleet-tracking
+spec:
+  # One replica. Every service here can run several -- the consumers share partitions through their
+  # group, the two HTTP services are stateless -- but a laptop running a Kafka, a MongoDB and six
+  # JVMs has no capacity to spare for replicas that prove nothing. The tracking processor is the
+  # exception, and it scales on demand rather than standing by: see the ScaledObject in the local
+  # overlay.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dashboard-api
+        app.kubernetes.io/part-of: fleet-tracking
+    spec:
+      # The image runs as uid 1000 (set by Jib in the root POM). Stating it here as well is not
+      # redundancy for its own sake: runAsNonRoot is what makes the kubelet *refuse* to start a
+      # container that turns out to run as root, so a base image change that quietly reverted to
+      # uid 0 would fail visibly here rather than shipping.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: dashboard-api
+          image: ghcr.io/goutham-hegde/fleet-tracker/dashboard-api:0.1.0-SNAPSHOT
+          # The addresses of Kafka and MongoDB inside the cluster, overriding the host ports the
+          # image was built with. See platform-endpoints.yaml.
+          envFrom:
+            - configMapRef:
+                name: platform-endpoints
+          ports:
+            - name: http
+              containerPort: 18083
+          resources:
+            # Requests are what the scheduler reserves and what a pod is guaranteed; limits are
+            # where it gets killed. 512Mi with -XX:MaxRAMPercentage=75 gives the heap about 384Mi
+            # and leaves the rest for metaspace, thread stacks and the Kafka client's direct
+            # buffers -- which live outside the heap and are exactly what an OOMKill on a service
+            # whose heap graph looked healthy turns out to have been.
+            #
+            # There is deliberately no CPU limit. A CPU limit is enforced by throttling rather than
+            # by killing, so a JVM that briefly needs more than its share -- during startup, or a
+            # garbage collection -- is simply made slower, often slow enough to fail its own probes
+            # and be restarted, at which point the restart needs the CPU it is being denied. The
+            # request is the number that actually matters: it reserves a share, and it is what an
+            # autoscaler measures against.
+            requests:
+              memory: 384Mi
+              cpu: 150m
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # The one directory a JVM genuinely needs to write: java.io.tmpdir. An emptyDir is
+            # created empty per pod and deleted with it, which is what lets the rest of the
+            # filesystem be read-only -- so a compromised process cannot rewrite the application it
+            # is running.
+            - name: tmp
+              mountPath: /tmp
+          # Three probes, three different questions, and conflating any two of them is the classic
+          # way to turn a slow dependency into an outage.
+          #
+          # startup: "has it finished booting". A JVM with Spring, a Kafka client and a Mongo client
+          # takes ten to twenty seconds here, and while this probe is running the other two are
+          # suspended -- which is what lets the liveness probe be impatient without a cold start
+          # being mistaken for a hang. Thirty attempts three seconds apart is a 90-second budget.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 3
+            failureThreshold: 30
+          # liveness: "is this process broken beyond recovery, restart it". It asks only about the
+          # application's own state and deliberately not about MongoDB or Kafka. A liveness probe
+          # that fails when a database is slow restarts every pod at once, and the restart storm
+          # outlasts the blip that caused it.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          # readiness: "should traffic go here". This one does include the dependencies -- see the
+          # readiness health group in the service's application.yaml. Failing it removes the pod
+          # from its Service's endpoints and nothing else; the container keeps running and recovers
+          # by itself when the dependency does.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          # SSE connections stay open for as long as somebody is watching. On shutdown each one is
+          # closed and the browser reconnects by itself, which is the whole reason this stream is
+          # SSE rather than a WebSocket; the grace period only keeps that from being abrupt.
+      terminationGracePeriodSeconds: 45
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# In-cluster address. The browser reaches this service through the NodePort below rather
+# than through here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-api
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: dashboard-api
+spec:
+  selector:
+    app.kubernetes.io/name: dashboard-api
+  ports:
+    - name: http
+      port: 18083
+      targetPort: http
+---
+# Host access on localhost:18083, the port this service has answered on since it was built.
+#
+# Three hops, one per boundary crossed: Kind's cluster config maps the host's 18083 to
+# 30083 on the node container, and this NodePort service listens on 30083 on the node and
+# forwards to the pod's 18083. Adding a mapping means recreating the Kind cluster -- they are
+# fixed at creation time -- which is why deploy/kind-cluster.yaml gained all three service ports at
+# once in S17 rather than one per session.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-api-external
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: dashboard-api
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: dashboard-api
+  ports:
+    - name: http
+      port: 18083
+      targetPort: http
+      nodePort: 30083

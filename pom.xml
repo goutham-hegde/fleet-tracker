@@ -30,6 +30,22 @@
 
     <spring-boot.version>4.1.1</spring-boot.version>
 
+    <!-- Container images. Jib builds them from the compiled classes without a Dockerfile and
+         without a Docker daemon of its own : see the pluginManagement entry below for why that
+         matters here. -->
+    <jib-maven-plugin.version>3.5.2</jib-maven-plugin.version>
+
+    <!-- Where images are named. The repository is public, so ghcr.io is free and unlimited for
+         it; ECR's free tier is 500 MB for twelve months and would not hold these. M7 pushes
+         here from CI. Locally the same name is built straight into the Docker daemon and loaded
+         into Kind, so an image never has to travel over the network to be run. -->
+    <image.repository>ghcr.io/goutham-hegde/fleet-tracker</image.repository>
+
+    <!-- The tag every manifest in deploy/ refers to. A moving tag like "latest" is exactly the
+         wrong thing for a cluster to pull : two nodes can disagree about what it means, and a
+         rollback has nothing to roll back to. M7 replaces this with the commit SHA. -->
+    <image.tag>${project.version}</image.tag>
+
     <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
     <maven-failsafe-plugin.version>3.5.2</maven-failsafe-plugin.version>
@@ -85,6 +101,70 @@
           <artifactId>spring-boot-maven-plugin</artifactId>
           <version>${spring-boot.version}</version>
         </plugin>
+
+        <!-- Every service image is built by this one configuration; a service module declares the
+             plugin and states nothing, so five images cannot drift apart in their base layer,
+             their JVM flags or their user.
+
+             Jib rather than a Dockerfile per service. Three reasons, in order of how much they
+             matter here. It needs no Docker daemon to build an image, which is what makes M7's CI
+             job a plain Maven run rather than a privileged one. It layers by rate of change :
+             dependencies, resources, then this project's own classes, so a code change repushes a
+             few hundred kilobytes instead of a fat jar. And there is no Dockerfile to keep in step
+             with the build : the classpath and the main class come from the POM that already
+             states them. The cost is that the image is not a "java -jar app.jar" image; Jib puts
+             the classpath on disk and runs the main class directly, so the Spring Boot executable
+             jar built by the repackage goal is not what ships. Both are still produced. -->
+        <plugin>
+          <groupId>com.google.cloud.tools</groupId>
+          <artifactId>jib-maven-plugin</artifactId>
+          <version>${jib-maven-plugin.version}</version>
+          <configuration>
+            <from>
+              <!-- A JRE, not a JDK : half the size, and no compiler in a runtime image. Alpine
+                   rather than the Ubuntu-based default for the same reason, and it is worth about
+                   300 MB per image; the five services share the layer, so the saving lands once on
+                   a laptop and five times in a registry.
+
+                   Temurin rather than distroless, deliberately. Distroless has no shell, so
+                   `kubectl exec` into a misbehaving pod gives nothing at all : and M6 is precisely
+                   the milestone where pods are expected to misbehave. -->
+              <image>eclipse-temurin:21-jre-alpine</image>
+            </from>
+            <to>
+              <!-- Tag stated here rather than in a <tags> list, which would ALSO produce a
+                   `latest` : the tag on to.image defaults to latest when none is given. A moving
+                   tag is the wrong thing for a cluster to hold: two nodes can disagree about what
+                   it means and a rollback has nothing to roll back to. -->
+              <image>${image.repository}/${project.artifactId}:${image.tag}</image>
+            </to>
+            <container>
+              <!-- The JVM sizes the heap from the *container* limit, not the host, as long as it
+                   is told what share to take. 75% of 512Mi leaves room for the JVM's own
+                   non-heap memory : metaspace, thread stacks, the Kafka client's direct buffers.
+                   Without it the default is 25%, which wastes most of the limit the manifests
+                   ask for. -->
+              <jvmFlags>
+                <jvmFlag>-XX:MaxRAMPercentage=75</jvmFlag>
+                <!-- Container-friendly randomness. /dev/random blocks on a machine with little
+                     entropy, which on a fresh node shows up as a service that hangs during
+                     startup with nothing in the log after the banner. -->
+                <jvmFlag>-Djava.security.egd=file:/dev/./urandom</jvmFlag>
+              </jvmFlags>
+              <!-- Not root. Jib's default is uid 0 unless told otherwise, and a JVM serving
+                   HTTP has no need of it. -->
+              <user>1000:1000</user>
+              <!-- A fixed creation time is what makes the same source produce the same image
+                   digest. The alternative, USE_CURRENT_TIMESTAMP, is honest about when an image
+                   was built and gives up reproducibility for it; reproducibility is the more
+                   useful property once CI is tagging images by commit, because two builds of one
+                   commit then produce the same digest and a deployment can be compared against
+                   what is running. The cost is cosmetic: `docker images` reports every image as
+                   55 years old, because the fixed instant is the Unix epoch. -->
+              <creationTime>EPOCH</creationTime>
+            </container>
+          </configuration>
+        </plugin>
       </plugins>
     </pluginManagement>
 
@@ -130,4 +210,42 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- Container images: ./mvnw -Pimages -DskipTests package
+         (or scripts/images.sh, which also loads them into Kind).
+
+         A profile rather than a normal execution, because building six images is slow and nothing
+         about `./mvnw verify` needs one. And a bound execution rather than `./mvnw jib:dockerBuild`
+         on the command line, because a goal invoked that way runs against every module in the
+         reactor, including libs/events, which has no main class and fails with a message about
+         adding one. Binding it here means only the modules that declared the plugin build an
+         image, and the two libraries are silently and correctly skipped.
+
+         dockerBuild puts the image straight into the local Docker daemon, from where scripts/
+         images.sh loads it into the Kind node. M7's CI job will use the `build` goal instead,
+         which pushes to a registry and needs no Docker daemon at all. -->
+    <profile>
+      <id>images</id>
+      <build>
+        <pluginManagement>
+          <plugins>
+            <plugin>
+              <groupId>com.google.cloud.tools</groupId>
+              <artifactId>jib-maven-plugin</artifactId>
+              <executions>
+                <execution>
+                  <id>build-image</id>
+                  <phase>package</phase>
+                  <goals>
+                    <goal>dockerBuild</goal>
+                  </goals>
+                </execution>
+              </executions>
+            </plugin>
+          </plugins>
+        </pluginManagement>
+      </build>
+    </profile>
+  </profiles>
 </project>

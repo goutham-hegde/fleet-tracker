@@ -32,11 +32,16 @@
       <version>${project.version}</version>
     </dependency>
 
-    <!-- starter, not starter-web: this service has no HTTP surface. It is kept alive by the
-         Kafka listener container's own non-daemon thread rather than by a servlet container. -->
+    <!-- starter-web, and only for the sake of the probes below. Nothing calls this service : it
+         pulls its work from a topic, and it did without a servlet container at all until S17. What
+         changed is that Kubernetes has to be able to ask a container whether it is alive and
+         whether it is ready, and the only answer available to a process with no port is an exec
+         probe, which can tell that a JVM exists and nothing whatever about whether it is still
+         consuming. The HTTP surface here is the actuator endpoints and nothing else : there is not
+         a single controller in this module. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter</artifactId>
+      <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
 
     <dependency>
@@ -47,6 +52,15 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-mongodb</artifactId>
+    </dependency>
+
+    <!-- Health, liveness and readiness over HTTP. Kubernetes decides whether to restart a
+         container and whether to send it traffic by asking it, and an answer of "the process
+         exists" is not the same answer as "the application works". Actuator supplies both, as
+         two separate endpoints with two separate meanings. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
     <dependency>
@@ -101,6 +115,13 @@
             </goals>
           </execution>
         </executions>
+      </plugin>
+
+      <!-- Container image. All configuration is in the parent's pluginManagement so that five
+           service images cannot drift apart; this module only opts in. -->
+      <plugin>
+        <groupId>com.google.cloud.tools</groupId>
+        <artifactId>jib-maven-plugin</artifactId>
       </plugin>
     </plugins>
   </build>

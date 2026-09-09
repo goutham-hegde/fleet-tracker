@@ -15,8 +15,8 @@ kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
 # thanks to --if-not-exists.
 kubectl delete job kafka-topics -n fleet --ignore-not-found >/dev/null 2>&1 || true
 
-log "Applying deploy/base"
-kubectl apply -k "$REPO_ROOT/deploy/base"
+log "Applying deploy/base/platform (Kafka, MongoDB, topics)"
+kubectl apply -k "$REPO_ROOT/deploy/base/platform"
 
 # rollout status waits on the readiness probes, which for both of these run a
 # real client command rather than a port check -- so "available" here means the

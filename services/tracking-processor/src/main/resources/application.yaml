@@ -2,10 +2,13 @@ spring:
   application:
     name: tracking-processor
 
-  main:
-    # No HTTP surface: this service is driven by a topic, not by callers. The Kafka listener
-    # container keeps the JVM alive; see TrackingProcessorApplication.
-    web-application-type: none
+  # No `main.web-application-type: none` any more, and its removal is the S17 change worth
+  # understanding. Nothing calls this service and nothing ever will -- it is driven by a topic.
+  # What it now needs is somewhere for Kubernetes to ask whether it is alive and whether it is
+  # ready, and a process with no port can only be asked by running a command inside its container,
+  # which can establish that a JVM is running and nothing at all about whether it is still
+  # consuming. So there is a servlet container, it serves the actuator endpoints below, and it
+  # serves nothing else: there is no controller in this module.
 
   # spring.mongodb, NOT spring.data.mongodb. Spring Boot 4 moved the connection properties out of
   # Spring Data's namespace and deprecated the old names at level "error", which means they are no
@@ -132,6 +135,41 @@ fleet:
       # Shipment models held in memory. Bounded, evicting the least recently used; an evicted
       # model is in MongoDB and is read back on that shipment's next fix.
       cache-size: 4096
+
+server:
+  # 18084. Not reachable from the host and not mapped through Kind: this port exists for the
+  # kubelet, which reaches a pod directly rather than through a service.
+  port: 18084
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health only, plus the build/version information the dashboard of a real deployment would
+        # read. Actuator can expose a great deal more -- environment, configuration properties,
+        # thread dumps -- and every one of those is a way to read this service's configuration over
+        # HTTP. Exposure is opt-in for that reason, and this list is the whole of it.
+        include: health,info
+
+  endpoint:
+    health:
+      # Splits health into two endpoints with two different meanings: /actuator/health/liveness and
+      # /actuator/health/readiness. Kubernetes asks the first "should I restart this container" and
+      # the second "should I send it traffic", and answering both with one number is the classic
+      # way to build an outage: a database blip fails a combined health check, every pod is
+      # restarted at once, and the restart storm outlasts the blip.
+      probes:
+        enabled: true
+      # Local only. The details name the database the service actually connected to, which is what
+      # makes a failing probe diagnosable with curl instead of a log dive -- and is also exactly
+      # what should not be public once this is on the internet in M8.
+      show-details: always
+      group:
+        readiness:
+          # Readiness carries the dependencies this service cannot do its job without; liveness deliberately
+          # carries none of them. Position history and current position are both writes to MongoDB; a
+          # processor that cannot write is only accumulating consumer lag.
+          include: readinessState,mongo
 
 logging:
   level:

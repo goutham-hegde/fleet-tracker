@@ -37,3 +37,22 @@ nodes:
       - containerPort: 30017
         hostPort: 37017
         protocol: TCP
+      # ingest-gateway       -> http://localhost:18081
+      #
+      # These three arrived in S17, when the services stopped being jars on the host and became
+      # pods. Until then they needed no mapping: a service running on Windows was already on
+      # localhost. A port mapping can only be set when the cluster is created, so adding one means
+      # destroying and recreating the cluster -- which is why all three went in at once rather than
+      # one per session, and why the ports are the same ones each service has answered on since it
+      # was built. Nothing outside this file had to change to move a service into the cluster.
+      - containerPort: 30081
+        hostPort: 18081
+        protocol: TCP
+      # shipment-service     -> http://localhost:18082
+      - containerPort: 30082
+        hostPort: 18082
+        protocol: TCP
+      # dashboard-api        -> http://localhost:18083
+      - containerPort: 30083
+        hostPort: 18083
+        protocol: TCP

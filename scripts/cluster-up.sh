@@ -16,4 +16,6 @@ kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
 log "Nodes"
 kubectl get nodes
 echo
-ok "Cluster ready. Host ports: dashboard 18080 | kafka 19092 | mongo 37017"
+ok "Cluster ready. Host ports:"
+ok "  dashboard 18080 | ingest-gateway 18081 | shipment-service 18082 | dashboard-api 18083"
+ok "  kafka 19092     | mongo 37017"

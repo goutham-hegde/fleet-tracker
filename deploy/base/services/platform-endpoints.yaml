@@ -1,0 +1,35 @@
+# Where the platform is, stated once.
+#
+# Every service in this project ships with host addresses in its application.yaml --
+# mongodb://localhost:37017 and localhost:19092 -- because for five milestones every service ran as
+# a jar on a laptop next to a cluster. Inside the cluster neither address exists: there is no
+# localhost worth speaking of in a pod, and the ports the host sees are Kind's mappings rather than
+# anything the broker or the database is listening on.
+#
+# These three values override them. Spring binds an environment variable to a property by relaxed
+# naming, so SPRING_MONGODB_URI sets spring.mongodb.uri, and an environment variable outranks
+# anything in application.yaml. That is what makes one image runnable both ways: the same artifact
+# that a developer runs against the host ports is the one that runs in the cluster, and nothing was
+# rebuilt to move it.
+#
+# Note what these names are NOT. spring.data.mongodb.uri is the Spring Boot 3 spelling, deprecated
+# at level "error" in Boot 4, which means it binds to nothing at all and does so silently -- the
+# service would start perfectly and connect to a default that, on the machine this was built on,
+# is a completely unrelated database that answers every query.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-endpoints
+  namespace: fleet
+data:
+  # The headless service in front of the broker. Kafka hands a client the advertised listener to
+  # reconnect on, so this name has to be the one the broker advertises internally -- see the
+  # KAFKA_ADVERTISED_LISTENERS entry in kafka/configmap.yaml.
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka.fleet.svc.cluster.local:9092
+
+  # 27017, the real port MongoDB listens on. The 37017 every script on the host uses is a Kind port
+  # mapping, invented to avoid an unrelated mongod on the developer's machine, and it has no
+  # meaning inside the cluster.
+  SPRING_MONGODB_URI: mongodb://mongodb.fleet.svc.cluster.local:27017
+
+  SPRING_MONGODB_DATABASE: fleet

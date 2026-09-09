@@ -104,6 +104,37 @@ fleet:
       # Thinned per shipment rather than globally, so a quiet truck is never delayed by a busy one.
       sample-interval: 500ms
 
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health only, plus the build/version information the dashboard of a real deployment would
+        # read. Actuator can expose a great deal more -- environment, configuration properties,
+        # thread dumps -- and every one of those is a way to read this service's configuration over
+        # HTTP. Exposure is opt-in for that reason, and this list is the whole of it.
+        include: health,info
+
+  endpoint:
+    health:
+      # Splits health into two endpoints with two different meanings: /actuator/health/liveness and
+      # /actuator/health/readiness. Kubernetes asks the first "should I restart this container" and
+      # the second "should I send it traffic", and answering both with one number is the classic
+      # way to build an outage: a database blip fails a combined health check, every pod is
+      # restarted at once, and the restart storm outlasts the blip.
+      probes:
+        enabled: true
+      # Local only. The details name the database the service actually connected to, which is what
+      # makes a failing probe diagnosable with curl instead of a log dive -- and is also exactly
+      # what should not be public once this is on the internet in M8.
+      show-details: always
+      group:
+        readiness:
+          # Readiness carries the dependencies this service cannot do its job without; liveness deliberately
+          # carries none of them. Every snapshot this service serves is a read of the other services'
+          # collections; with no database it would serve an empty fleet, which is indistinguishable from a
+          # fleet that has stopped reporting.
+          include: readinessState,mongo
+
 logging:
   level:
     com.fleettracking: INFO

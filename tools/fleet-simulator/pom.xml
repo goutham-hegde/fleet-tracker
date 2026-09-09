@@ -62,6 +62,23 @@
           </execution>
         </executions>
       </plugin>
+
+      <!-- Container image. The simulator is a tool rather than a service, and it gets an image for
+           one reason: a demonstration that needs a jar started by hand on the developer's laptop is
+           not a stack that runs from manifests. It is deployed by the local overlay only, never by
+           the base : a real deployment has real trucks. -->
+      <plugin>
+        <groupId>com.google.cloud.tools</groupId>
+        <artifactId>jib-maven-plugin</artifactId>
+        <configuration>
+          <container>
+            <!-- Stated because this module has two classes with a main method : the simulator and
+                 the lane exporter that writes docs/samples/lanes.json. Jib finds both and refuses
+                 to guess, which is the right behaviour and worth one line here. -->
+            <mainClass>com.fleettracking.simulator.FleetSimulatorApplication</mainClass>
+          </container>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 </project>

@@ -1,0 +1,36 @@
+# The local environment: this laptop, a single Kind node, and a simulated fleet.
+#
+# `kubectl apply -k deploy/overlays/local` is M6's exit criterion, and this file is what makes the
+# difference between "the platform" and "the platform, here". The base underneath it knows nothing
+# about where it runs; everything in this directory is a fact about this machine:
+#
+#   - images come from the local Docker daemon by way of `kind load`, not from a registry
+#   - the fleet is simulated, because there are no trucks
+#   - the tracking processor autoscales on Kafka lag, which requires KEDA to be installed first
+#
+# A cloud overlay in M8 will replace all three and reuse everything else.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet
+
+resources:
+  - ../../base
+  - simulator.yaml
+  - tracking-processor-scaledobject.yaml
+
+patches:
+  # Never pull. The images are built on this machine and pushed into the Kind node with
+  # `kind load docker-image`; they do not exist at ghcr.io yet, because publishing them is M7.
+  #
+  # `Never` rather than `IfNotPresent` deliberately, even though the tag is not `latest` and the
+  # default would already be IfNotPresent. IfNotPresent would silently reach for the registry the
+  # first time an image name was mistyped or a `kind load` was forgotten, and the failure would be
+  # a slow ImagePullBackOff naming a registry that has nothing to do with the mistake. `Never`
+  # fails immediately with ErrImageNeverPull, which says precisely what happened: this node does
+  # not have that image.
+  - target:
+      kind: Deployment
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never

@@ -1,0 +1,19 @@
+# The platform layer: the namespace, and the two stateful dependencies every service is written
+# against.
+#
+# Separate from the application layer next door because the two have completely different
+# lifecycles. Kafka's log directory is its database and MongoDB holds every collection this
+# platform has ever written; both are deployed once and then left alone, and deleting either
+# destroys data. The six workloads in ../services are rebuilt from source and rolled out
+# constantly, and deleting one costs nothing but the seconds it takes to start again.
+#
+# Keeping them apart is what lets `scripts/platform-up.sh` deploy the durable half without
+# touching the disposable half, which is the difference between a script that is safe to run
+# repeatedly and one that is not.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet
+resources:
+  - namespace.yaml
+  - kafka
+  - mongodb

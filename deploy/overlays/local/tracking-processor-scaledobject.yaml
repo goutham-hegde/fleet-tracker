@@ -1,0 +1,106 @@
+# Autoscaling the one service where scaling means anything.
+#
+# The exit criterion for M6 says the tracking processor scales when consumer lag climbs, and the
+# word "lag" is the whole of the design problem. Lag is how many records sit on a topic that a
+# consumer group has not read yet -- the difference between the newest offset on a partition and
+# the offset the group has committed. It is the honest measure of whether a consumer is keeping up:
+# a processor at 90% CPU that is nonetheless three records behind is fine, and one at 20% CPU that
+# is four hundred thousand records behind is not.
+#
+# Kubernetes cannot see lag. Its built-in autoscaler reads CPU and memory from the metrics API, and
+# neither of those is the question being asked here. Two ways out:
+#
+#   - Scale on CPU anyway, and rely on lag and CPU rising together. They do, roughly, in this
+#     platform. But then the thing being measured is a symptom that happens to correlate, and the
+#     first time a slow MongoDB makes the processor fall behind while using less CPU, the
+#     autoscaler concludes everything is fine.
+#   - Teach the cluster to read lag. That is what KEDA is: an operator that polls an external
+#     system -- here, Kafka's own consumer group offsets -- and feeds the number to an ordinary
+#     HorizontalPodAutoscaler that it creates and owns. The HPA underneath is stock Kubernetes; the
+#     part KEDA adds is knowing how to ask a broker a question.
+#
+# The second, because the criterion says lag and answering a different question would be answering
+# a different question. Install KEDA with scripts/keda-up.sh.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: tracking-processor
+  namespace: fleet
+spec:
+  scaleTargetRef:
+    # KEDA takes over the replica count of this Deployment. The `replicas: 1` in the base manifest
+    # becomes the starting point and nothing more: re-applying the base does not fight the
+    # autoscaler, because KEDA writes the replica count through the HPA it owns.
+    name: tracking-processor
+
+  # Never scale to zero. KEDA can, and for a queue worker that is often right -- but this consumer
+  # holds partition assignments, and dropping to zero replicas means leaving the group entirely, so
+  # the first message after a quiet spell would wait for a pod to start, a group to rebalance and a
+  # Spring context to boot. The map would visibly stall. A live tracking platform has no idle.
+  minReplicaCount: 1
+
+  # Four, on a laptop, and the reasoning has two separate ceilings in it. The hard one is the topic:
+  # position.events.v1 has 12 partitions and a partition has exactly one consumer in a group, so a
+  # thirteenth pod would sit idle for ever no matter what the lag said. The soft one is this
+  # machine: four pods at 512Mi is 2 GB on top of a Kafka, a MongoDB and five other JVMs.
+  maxReplicaCount: 4
+
+  # There is deliberately no pollingInterval and no cooldownPeriod here, and the omission is the
+  # most useful thing in this file. Both were written first, both looked obviously right, and KEDA
+  # answered the apply with a warning that neither is relevant while minReplicaCount is above zero.
+  #
+  # The reason is worth keeping. KEDA does two quite different jobs and only one of them is
+  # autoscaling. Deciding whether a workload should exist at all -- zero replicas or some -- is
+  # KEDA's own, and that decision is what pollingInterval times and what cooldownPeriod delays.
+  # Deciding how many replicas a running workload should have is not KEDA's at all: it hands the
+  # number to a stock HorizontalPodAutoscaler and the HPA's own loop and behaviour rules take over.
+  # This workload never scales to zero, so it lives entirely in the second world, and the two
+  # settings would have sat in the manifest reading as though they governed something.
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          # React to a burst quickly. Falling behind is the failure this exists to prevent.
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 2
+              periodSeconds: 60
+        scaleDown:
+          # And leave slowly. Five minutes of sustained calm before giving a pod back, one at a
+          # time: the asymmetry is deliberate, because being over-provisioned costs memory and
+          # being under-provisioned costs a growing backlog of positions nobody can see on a map.
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120
+
+  triggers:
+    - type: kafka
+      metadata:
+        # The broker, by the same in-cluster name every service uses.
+        bootstrapServers: kafka.fleet.svc.cluster.local:9092
+
+        # The group whose lag is measured. This must match spring.kafka.consumer.group-id in the
+        # service exactly -- and that is less obvious than it sounds, because Spring Kafka
+        # overrides the configured group with the listener's id unless idIsGroup = false is set on
+        # the annotation. The service ran for a whole session in a group called `position-events`
+        # while its configuration said otherwise. An autoscaler pointed at a group that does not
+        # exist reads a lag of zero and never scales, which looks exactly like a fleet that is
+        # keeping up.
+        consumerGroup: tracking-processor
+        topic: position.events.v1
+
+        # Records of lag per pod. KEDA divides the total lag by this and asks for that many
+        # replicas: 500 means one pod up to 500 behind, two up to 1000, and the ceiling above at
+        # 2000. Chosen against what this platform actually produces -- four trucks at time-scale
+        # 150 generate roughly 100 positions a second, so 500 is about five seconds of backlog,
+        # which is comfortably longer than a GC pause and far shorter than a person would notice
+        # on a map.
+        lagThreshold: "500"
+
+        # If the group has never committed an offset, treat it as being at the earliest offset --
+        # matching the service's own auto-offset-reset. The alternative reports no lag for a group
+        # that has not started yet, so a cold start with a full topic would scale nothing.
+        offsetResetPolicy: earliest

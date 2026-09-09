@@ -1,10 +1,13 @@
-# The platform layer: the two stateful dependencies every service needs.
-# Application services join this list from M2 onward, and the local overlay
-# that M6 requires (`kubectl apply -k deploy/overlays/local`) will build on it.
+# The whole platform: the two stateful dependencies, and as of S17 the six workloads that use
+# them. Environment-agnostic on purpose -- nothing in here knows it is running on a laptop. What
+# is specific to this machine (which images to pull and from where, how many trucks to simulate,
+# what to autoscale on) lives in deploy/overlays/local, which is what M6's exit criterion applies.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: fleet
 resources:
-  - namespace.yaml
-  - kafka
-  - mongodb
+  # The durable half: the namespace, Kafka and MongoDB. Deployed once and left alone.
+  - platform
+  # The disposable half: five services, a dashboard, and the ConfigMap that tells them where the
+  # platform is. Rebuilt from source and rolled out constantly.
+  - services

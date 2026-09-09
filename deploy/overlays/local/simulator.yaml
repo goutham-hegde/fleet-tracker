@@ -1,0 +1,82 @@
+# The fleet, simulated, inside the cluster.
+#
+# This is in the local overlay and will never be in the base, and the reason is not subtle: a real
+# deployment has real trucks. What it buys here is the difference between a stack that runs from
+# manifests and one that runs from manifests plus a jar somebody remembers to start -- M5's demo
+# script exists because six terminals in the right order is not a deployment, and a seventh terminal
+# holding the traffic generator would be the same problem one milestone later.
+#
+# It posts to the gateway by service name, which is the whole point of moving it in here. On the
+# host it posts to localhost:18081, a Kind port mapping that leaves the node and comes back; from a
+# pod it is one hop inside the cluster network to a Service that resolves by DNS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-simulator
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: fleet-simulator
+    app.kubernetes.io/part-of: fleet-tracking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fleet-simulator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fleet-simulator
+        app.kubernetes.io/part-of: fleet-tracking
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: fleet-simulator
+          image: ghcr.io/goutham-hegde/fleet-tracker/fleet-simulator:0.1.0-SNAPSHOT
+          # Command-line arguments rather than environment variables, because these are exactly the
+          # arguments the README and every session log have used since M1 -- the same run, moved.
+          # Spring binds them identically either way.
+          args:
+            # The disrupted profile: breakdowns, slowdowns, detours, reefer failures and blackouts,
+            # one per SLA rule. Every message it produces is perfectly well formed; it simply
+            # describes something bad. That is a different thing from the chaos profile, which
+            # breaks the wire instead, and the two are separate on purpose.
+            - --spring.profiles.active=disrupted
+            - --fleet.simulator.emit.http.enabled=true
+            # The gateway by DNS name and its real port. Not localhost:18081, which is a mapping
+            # that only exists on the developer's machine.
+            - --fleet.simulator.emit.http.base-url=http://ingest-gateway.fleet.svc.cluster.local:18081
+            # 150 simulated seconds per real second, four trucks, a tick every 200 ms. Four rather
+            # than sixty-four because the HTTP sink's ceiling is around 100 messages a second: one
+            # worker, one awaited broker acknowledgement per request. Above that it drops by
+            # design, which would make every count in a demonstration a lie about a different
+            # thing.
+            - --fleet.simulator.time-scale=150
+            - --fleet.simulator.tick-interval=200ms
+            - --fleet.simulator.trucks=4
+            # Left on, so a truck that finishes its lane is replaced by a fresh one and the map
+            # never runs dry for somebody who is still watching.
+            - --fleet.simulator.repeat-routes=true
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 200m
+            limits:
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          # No probes. There is no HTTP surface here and no reason to add one: nothing routes
+          # traffic to a load generator, and if it stops the symptom is a map that stops moving,
+          # which is the most visible failure in this entire project.
+      volumes:
+        - name: tmp
+          emptyDir: {}

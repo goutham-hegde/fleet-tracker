@@ -55,6 +55,15 @@
       <version>3.0.7</version>
     </dependency>
 
+    <!-- Health, liveness and readiness over HTTP. Kubernetes decides whether to restart a
+         container and whether to send it traffic by asking it, and an answer of "the process
+         exists" is not the same answer as "the application works". Actuator supplies both, as
+         two separate endpoints with two separate meanings. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-configuration-processor</artifactId>
@@ -97,6 +106,13 @@
             </goals>
           </execution>
         </executions>
+      </plugin>
+
+      <!-- Container image. All configuration is in the parent's pluginManagement so that five
+           service images cannot drift apart; this module only opts in. -->
+      <plugin>
+        <groupId>com.google.cloud.tools</groupId>
+        <artifactId>jib-maven-plugin</artifactId>
       </plugin>
     </plugins>
   </build>

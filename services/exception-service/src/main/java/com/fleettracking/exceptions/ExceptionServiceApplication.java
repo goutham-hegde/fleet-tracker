@@ -31,12 +31,17 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * rules get added, a customer negotiates a different tolerance. That belongs in something that can
  * be redeployed without touching the consumer holding the fleet's history.
  *
- * <h2>No web server, and what keeps it alive</h2>
+ * <h2>No endpoints, and what keeps it alive</h2>
  *
- * <p>The same shape as the tracking processor: {@code web-application-type: none}, and the Kafka
- * listener containers supply the non-daemon threads that stop the JVM exiting the moment
- * {@code main} returns. There is one further non-daemon dependency here — the scheduled sweep the
- * signal-loss rule needs — but the listeners are what actually hold the process open.
+ * <p>The same shape as the tracking processor. Nothing calls this service; the Kafka listener
+ * containers supply the non-daemon threads that stop the JVM exiting the moment {@code main}
+ * returns. There is one further non-daemon dependency here — the scheduled sweep the signal-loss
+ * rule needs — but the listeners are what actually hold the process open.
+ *
+ * <p>As of S17 there is a servlet container, and it exists for the kubelet rather than for any
+ * caller: a container with no port can only be probed by running a command inside it, which
+ * establishes that a JVM exists and nothing about whether rules are still being applied. It serves
+ * the two actuator health probes and nothing else — there is no controller in this module.
  */
 @SpringBootApplication
 public class ExceptionServiceApplication {

@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-09 · **Current position:** M5 complete, session S16 of 24
+**Last updated:** 2026-09-09 · **Current position:** M6 complete, session S17 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -13,11 +13,11 @@ M2 ██████████  3/3              complete
 M3 ██████████  3/3              complete
 M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
-M6 ░░░░░░░░░░  0/1              ← next
-M7 ░░░░░░░░░░  0/2
+M6 ██████████  1/1              complete
+M7 ░░░░░░░░░░  0/2              ← next
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               16/24 sessions
+               17/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -158,13 +158,21 @@ screen seconds after the evidence does — and going away again when it ends.
 
 **Capability:** the whole stack runs from manifests, not from seven terminal tabs.
 
-- [ ] **S17** — Jib images, kustomize overlays, probes, limits, HPA
+- [x] **S17** — Jib images, kustomize overlays, probes, limits, autoscaling on lag ✅
 
 **Exit criteria**
 
-- [ ] `kubectl apply -k deploy/overlays/local` brings the stack up healthy from scratch
-- [ ] All pods pass probes; none OOMKill under simulator load
-- [ ] The HPA scales `tracking-processor` when consumer lag climbs
+- [x] `kubectl apply -k deploy/overlays/local` brings the stack up healthy from scratch — twelve
+  pods, every one ready 26 seconds after the apply
+- [x] All pods pass probes; none OOMKill under simulator load — zero restarts and zero abnormal
+  terminations across the whole session, including a deliberate overload at roughly six times the
+  demonstration's message rate
+- [x] The HPA scales `tracking-processor` when consumer lag climbs — on **real Kafka consumer lag**
+  rather than on CPU, measured 1 → 3 → 4 replicas as lag went 467 → 4,265 → 8,909
+
+**All three criteria pass as of 2026-09-09. M6 is complete and M7 is unblocked.** The platform is
+now a description a machine can apply rather than a sequence of commands a person runs, which is
+the precondition for everything M7 does: a CI job can apply the same manifests this laptop does.
 
 ---
 
@@ -1828,26 +1836,131 @@ what a class is.
 
 ---
 
+## S17 — Everything becomes a pod · 2026-09-09 · M6
+
+Every service in this project had run the same way since M2: a jar, on the host, against a Kafka and
+a MongoDB inside Kind. S16 made that arrangement reproducible in one command, which was the honest
+limit of what a shell script can be. S17 replaces it with manifests — seven container images, twelve
+pods, and one `kubectl apply` — because a script that starts jars can only be run by the person
+holding the laptop, while a description of the platform can be applied by a CI job in M7 and by a
+cloud cluster in M8.
+
+**Built:** Jib image builds for the five services and the simulator, a two-stage Dockerfile for the
+dashboard, a base split into a durable platform layer and a disposable services layer,
+`deploy/overlays/local`, liveness and readiness probes on every workload, memory limits, and
+autoscaling of the tracking processor on Kafka consumer lag through KEDA.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| How images are built | **Jib**, configured once in the root POM, with each service module declaring the plugin and stating nothing | A Dockerfile per service. Five Dockerfiles drift — in base image, in JVM flags, in whether the process runs as root — and each one restates a classpath and a main class the POM already knows. Jib also needs no Docker daemon, which is what makes M7's CI job a plain Maven run rather than a privileged one. The cost is real and worth stating: the Spring Boot executable jar is not what ships, because Jib puts the classpath on disk and runs the main class directly |
+| Base image | `eclipse-temurin:21-jre-alpine` | Distroless, which is smaller still and has no shell — so `kubectl exec` into a misbehaving pod gives nothing at all, in the one milestone where pods are expected to misbehave. Alpine over the Ubuntu-based default is worth about 300 MB an image |
+| How the host reaches a service now that it is a pod | **Recreate the Kind cluster** with port mappings for 18081, 18082 and 18083 | Reverse-proxying everything through the dashboard's nginx on 18080, which needs no recreate and removes CORS entirely — and quietly changes what `localhost:18083` means in the README, in every curl example and in the tests. Kind fixes port mappings at creation, so all three went in at once. Nothing outside `kind-cluster.yaml` changed meaning when the services moved |
+| What the autoscaler measures | **Kafka consumer lag**, via KEDA | CPU through metrics-server, which is smaller and simpler and answers a different question. Lag and CPU rise together here, roughly — until a slow MongoDB makes the consumer fall behind while using *less* CPU, at which point a CPU autoscaler concludes everything is fine. The criterion says lag |
+| Pull policy in the local overlay | `Never` | `IfNotPresent`, which is already the default for a non-`latest` tag. `IfNotPresent` reaches for ghcr.io the first time a `kind load` is forgotten and fails a minute later naming a registry that has nothing to do with the mistake; `Never` fails at once with `ErrImageNeverPull` |
+| Probes on the two Kafka consumers | Give them a servlet container serving **only** the actuator probes | An exec probe, which is the standard answer for a container with no port and establishes that a JVM process exists — which is equally true of a consumer that was evicted from its group an hour ago and has stored nothing since |
+| What readiness contains | The application's own state **plus MongoDB**; liveness contains neither | One combined health check. A liveness probe that fails when a database is slow restarts every pod at once, and the restart storm outlasts the blip. Kafka is deliberately in neither: the listener containers retry a broker outage for ever by design, and a readiness flap would add a rebalance to a broker already struggling |
+| CPU limits | None, anywhere; requests only | A limit per service. A CPU limit throttles rather than kills, so a JVM that briefly needs more during startup or a GC is made slower — often slow enough to fail its own probes and be restarted, at which point the restart needs the CPU it is being denied |
+| Whether the simulator gets an image | Yes, deployed by the local overlay only | Leaving it as a host jar. A stack that comes up from manifests except for the thing that generates its traffic is the same problem one milestone later; and a real deployment has real trucks, which is why it is in the overlay and never in the base |
+| What happens to `demo.sh` | Kept, and reframed as the host-jar path | Deleting it now that manifests can do the same. It remains the faster loop while a service is being *changed*: an edit and a restart, with no image build and no rollout in between |
+
+### What surprised me
+
+**A burst of lag does not scale anything, and that is correct.** The first autoscaling test paused
+the consumer until 2,880 records had piled up, then let it go — and the single running pod cleared
+the backlog before the autoscaler's loop came round. Nothing scaled. That looked like a failure for
+about a minute and is the right behaviour: scaling out to meet a backlog that has already gone is
+pure churn, and removing the consumer again forces a group rebalance during which *nothing* is
+consumed. What the criterion is really about is sustained overload, so the test became one — six
+simulator replicas at four times the demonstration's rate, which took lag from 467 to 8,909 and the
+replica count from 1 to 3 to 4 while it climbed.
+
+**Two of the autoscaler's settings did nothing, and KEDA said so on apply.** `pollingInterval` and
+`cooldownPeriod` were both written first and both looked obviously right. KEDA answered the apply
+with a warning that neither is relevant while `minReplicaCount` is above zero, and the reason is
+worth keeping: KEDA does two different jobs. Deciding whether a workload should exist at all — zero
+replicas or some — is its own, and that is what those two settings time and delay. Deciding how many
+replicas a *running* workload has is handed to a stock HorizontalPodAutoscaler, whose own loop and
+behaviour rules take over. This workload never scales to zero, so both settings would have sat in
+the manifest reading as though they governed something.
+
+**Jib produces a `latest` tag you did not ask for.** Stating the tag in a `<tags>` list leaves
+`to.image` without one, and it defaults to `latest` — so every build produced both, in a project
+whose own comment two lines above explained why a moving tag is the wrong thing for a cluster to
+hold. The tag belongs on the image reference itself.
+
+**Three small failures, each of which named something other than its cause.** `mvn jib:dockerBuild`
+on the command line runs against every module in the reactor and fails on `libs/events` asking for a
+main class it will never have — the fix is to bind the goal under a profile so only modules that
+declared the plugin build an image. A `--` inside an XML comment makes a POM unparseable, which this
+project has recorded since M0 and which caught me again. And `docker build` handed an absolute path
+from Git Bash answers "path not found", which reads like a missing directory and is a path
+translation; building from inside the directory with `.` avoids the translation entirely.
+
+**The KEDA release asset is named without the `v` its own tag carries** — `keda-2.20.2.yaml` under
+tag `v2.20.2` — so the obvious URL 404s from GitHub before Kubernetes is involved at all. The
+metrics adapter is likewise `keda-metrics-apiserver`, not the `keda-operator-metrics-apiserver` the
+chart's own naming suggests.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `kubectl apply -k deploy/overlays/local` on a freshly recreated cluster | Twelve pods, **all ready in 26 seconds** |
+| Restarts and abnormal terminations across the session | **Zero**, including through the overload run |
+| `curl localhost:18083/api/meta` | `{"openExceptions":0,"trackedShipments":4}` — the fleet moving inside the cluster |
+| `curl -N localhost:18083/api/stream` | Live `event:position` frames, unchanged from S15 |
+| `curl localhost:18081/actuator/health/readiness` | `UP`, with the database it actually connected to named in the details |
+| `curl localhost:18082/manifests/SHP-HYD-0002`, `curl localhost:18080/` | `200` and `200` — every documented port still means what it did |
+| Autoscaling under sustained load | lag 467 → 4,265 → 8,909; replicas **1 → 3 → 4** |
+| Autoscaling under a burst | 2,880-record backlog cleared by one pod before the loop reacted; no scale-out, by design |
+| Node footprint with everything running | 2.96 GiB of 10.7 GiB; requests 34% of allocatable, limits 74% |
+| `./scripts/stack-up.sh` end to end | **5 min 28 s**, including a full Maven image build for seven images, the seed scripts and a rollout of every workload |
+| The fleet after that run | 8 shipments tracked, markers both `MOVING` and `AT_STOP`, dashboard serving on 18080 |
+| Scale-in after the load stopped | 4 → 3 → 1 over about eight minutes, one pod at a time, as the behaviour rules specify |
+| `./mvnw verify` | Green across the reactor: every module SUCCESS, 9 min 25 s |
+
+### Left open
+
+- **The seed scripts still run from the host.** Reference data is loaded by `mongosh` over the
+  mapped port rather than by a Job in the cluster, so `kubectl apply -k` alone brings up a platform
+  that is healthy and has nothing to resolve against. Making the stack self-seeding is what a CI
+  environment will actually need in M7.
+- **`stack-up.sh` is still a script**, and it still knows the order things have to happen in. What
+  M6 bought is that the ordering is now over *manifests* rather than over processes, but the
+  ordering is real: KEDA before the overlay, seeds before traffic, derived state cleared before
+  consumers start.
+- **Autoscaling was demonstrated with duplicate load.** The six simulator replicas run the same
+  lanes, so a share of what they produced were events the processor dedups. It measures the
+  autoscaler, which is what the criterion is about, and it does not measure how much genuinely
+  distinct freight one pod can handle.
+- **One replica of everything except when scaling.** The two HTTP services and the dashboard are
+  stateless and could run several; nothing yet proves they do. The dashboard API deliberately must
+  not, because its consumer group is unique per process.
+- Carried forward: the archiver is still an empty directory; the wire contract between the browser
+  and the API is still hand-written on both sides; the basemap is still OpenStreetMap's own tile
+  servers; and the exception service's last-seen map is still in memory.
+
+---
+
 ## Next up
 
-**S17 — reproducible deployment, and the start of M6.** Every service in this project still runs as
-a jar on the host, started by a script, against a Kafka and a MongoDB that live in Kind. S16 made
-that arrangement reproducible in one command; M6 replaces it. The session builds container images
-with Jib, adds `deploy/overlays/local` on top of the base that has been there since M0, and gives
-every workload readiness and liveness probes, memory limits and an HPA on the tracking processor.
+**S18 — continuous integration, and the start of M7.** Everything the platform needs to be built
+and deployed is now stated in files: a POM that produces seven images without a Docker daemon, and a
+kustomize overlay that describes twelve pods. Nothing yet does either of those on anybody's behalf.
+S18 adds GitHub Actions — a workflow that runs `./mvnw verify` on a pull request, integration tests
+and all, and publishes SHA-tagged images to ghcr.io on a merge to main.
 
-Its exit criteria: `kubectl apply -k deploy/overlays/local` brings the whole stack up healthy from
-scratch; every pod passes its probes and none is OOMKilled under simulator load; and the HPA scales
-`tracking-processor` when consumer lag climbs.
+Its exit criteria: a PR runs fully green including integration tests against real Kafka and Mongo; a
+merge to main publishes SHA-tagged images; and a deliberately broken test blocks the pipeline.
 
-Three things S17 should know before it starts. The memory budget is already decided — `512Mi` per
-service with `-XX:MaxRAMPercentage=75`, on a single Kind node whose Kafka and MongoDB already cost
-about 625 MB on top of a 660 MB idle cluster. Kind has no metrics-server, so `kubectl top` does not
-work and an HPA needs one installed before it can scale on anything. And the ports this project has
-used all along are host ports through Kind's mappings; inside the cluster the services reach each
-other by service name, which is a configuration change per service rather than a code change.
-
-`scripts/demo.sh` is the thing M6 should eventually retire, and the honest way to judge S17 is
-whether the same demonstration can be brought up from manifests instead. Keep the script working
-until it can.
+Four things S18 should know. The integration tests are Testcontainers-backed, so the runner needs a
+Docker daemon — GitHub's Ubuntu runners have one, and `mvnw` is already committed mode `100755` with
+`.gitattributes` forcing LF, which is what stops a Windows checkout dying on the runner with `bad
+interpreter`. Image publishing needs `jib:build` rather than `jib:dockerBuild`: the first pushes to
+a registry and needs no daemon at all, which is why the Jib configuration was written to make that a
+one-word change. The image tag is a property (`image.tag`) in the root POM specifically so CI can
+override it with a commit SHA. And ghcr.io is free and unlimited for a public repository, which is
+why images go there rather than to ECR.
 
