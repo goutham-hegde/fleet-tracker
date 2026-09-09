@@ -1,10 +1,12 @@
 # Fleet Tracking
 
+[![CI](https://github.com/goutham-hegde/fleet-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/goutham-hegde/fleet-tracker/actions/workflows/ci.yml)
+
 Real-time shipment and fleet tracking platform. Ingests location and status events from four
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** in development — milestone M5 of M9, session 14 of 24.
+> **Status:** in development — milestone M7 of M9, session 18 of 24.
 > See **[PROGRESS.md](PROGRESS.md)** for the build log, decisions taken, and what is next.
 > Architecture decision records land in `docs/adr/` as they are written.
 
@@ -34,6 +36,7 @@ tools/          fleet-simulator — the synthetic data source
 libs/events/    canonical event model shared by everything
 libs/reference/ scheduled stops and distance maths, shared by two consumers
 dashboard/      React + MapLibre live map
+.github/        the CI workflow: tests on every pull request, images on every merge
 deploy/         kustomize manifests + ArgoCD applications
 infra/          Terraform for the AWS free-tier pieces
 docs/adr/       architecture decision records
@@ -668,6 +671,75 @@ Worth knowing: a *burst* does not scale anything. A 2,880-record backlog was cle
 running pod before the autoscaler's loop came round, which is the correct outcome — scaling out to
 meet a backlog that has already gone would be pure churn, since removing a consumer again forces a
 group rebalance.
+
+## Continuous integration
+
+Every push and every pull request is built by a machine that has never seen this project, from a
+clean checkout — which is the only honest test of whether the repository is self-contained. The
+workflow is `.github/workflows/ci.yml`.
+
+| Job | What it runs | Why it is separate |
+|---|---|---|
+| Java build and tests | `./mvnw verify` | `verify`, not `test`: it also runs the nine `*IT` classes, which start a real Kafka and a real MongoDB in containers |
+| Dashboard build and tests | `npm ci`, lint, `vitest`, `vite build` | Different language, different toolchain, different reasons to fail |
+| Kustomize overlays render | `kubectl kustomize` over all three layers | Catches a resource listed but missing, or a patch matching nothing, in five seconds and with no cluster |
+| Publish images to ghcr.io | Jib and one `docker build` | Only from `main`, and only if the three above passed |
+
+The three test jobs run at once, so the wall-clock cost is the slowest rather than the sum. They are
+separate rather than one long script because they fail for unrelated reasons, and a failure named
+"Dashboard" is worth more than a failure at line 340 of a single log.
+
+The integration tests are the reason this runs where it does: Testcontainers needs a Docker daemon,
+and GitHub's Ubuntu runners have one already, so nothing in the workflow installs or configures
+Docker.
+
+### Publishing
+
+Publishing lives in the same workflow as the tests, as a fourth job that `needs` the other three.
+That is the gate: `needs` is a hard dependency, so a failing test does not merely mark a pull
+request red — it makes the image that would have been built impossible. A separate workflow would
+have to watch this one finish and decide for itself, which is the same rule written twice in a
+place where the two copies can disagree.
+
+```
+ghcr.io/goutham-hegde/fleet-tracker/<name>:<commit sha>
+```
+
+Seven images, tagged with the full commit SHA and never `latest`. A moving tag cannot be rolled back
+to and cannot answer "what is actually running", because two machines can hold different images
+under the same name; a SHA names exactly one commit, so a running pod's image reference is a link
+into the history of this repository.
+
+The six JVM images are pushed by Jib's `build` goal, which assembles layers and sends them to the
+registry over HTTPS with **no Docker daemon involved at all** — the publishing job is an ordinary
+Maven run rather than a privileged one. The same POM builds them locally with `dockerBuild` instead;
+the goal is the only difference between a laptop image and a published one.
+
+```bash
+./mvnw -Pimages  -DskipTests package    # into the local Docker daemon (scripts/images.sh)
+./mvnw -Ppublish -DskipTests package -Dimage.tag=$(git rev-parse HEAD)   # to ghcr.io
+```
+
+There is no registry password anywhere in this repository and there should never be one. The job is
+handed a token by GitHub that exists only while it runs and can only touch this repository's
+packages; `docker login` writes it to `~/.docker/config.json`, and Jib reads that same file.
+
+Every image carries the OCI annotation `org.opencontainers.image.source`, which is what makes
+ghcr.io link a published package back to this repository rather than leaving it orphaned, plus
+`org.opencontainers.image.revision` — the commit it was built from, readable with `docker inspect`.
+
+### The gate
+
+`main` is protected: the three test jobs are required, force-pushes and deletion are refused, and
+the rule applies to the repository owner too. Without that last part it is advice rather than a
+gate, since the person most likely to merge something red at midnight is the person who wrote it.
+
+It has been exercised rather than assumed. A pull request that deliberately broke the shared JSON
+configuration ran red and GitHub reported it as `BLOCKED`; it was closed rather than merged. What
+that experiment also showed is worth keeping: the regression was caught seven minutes into the
+build by the *simulator's* tests, not by the module that owns the setting, because every event class
+carries its own `@JsonInclude` annotation and a class-level annotation beats a mapper default. There
+is now a test in `libs/events` that fails in seconds instead.
 
 ## The demo path, without containers
 
