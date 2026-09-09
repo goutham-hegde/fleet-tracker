@@ -144,4 +144,25 @@ class EventRoundTripTest {
 
     assertThat(mapper.readValue(json, Event.class)).isEqualTo(EventFixtures.positionEvent());
   }
+
+  /** A type that is not an event and carries no annotations of its own. */
+  record Unannotated(String present, String absent) {}
+
+  @Test
+  @DisplayName("omits nulls for a type that does not ask for it itself")
+  void omitsNullsByDefaultRatherThanByAnnotation() {
+    // omitsNulls() above proves less than it appears to. Every event class carries
+    // @JsonInclude(NON_NULL) of its own, and a class-level annotation beats the mapper's default
+    // -- so that test passes whatever this mapper is configured to do, and the configuration it
+    // is named after is unpinned.
+    //
+    // This is not hypothetical. S18 flipped the default to ALWAYS deliberately, to watch the CI
+    // gate refuse a bad change: every test in this module passed, and the regression surfaced
+    // seven minutes later in the simulator's emitter tests, because the simulator's wire payloads
+    // are the types that actually depend on the default. A shared mapper's setting has to be
+    // asserted against something that does not annotate its way out of it.
+    String json = mapper.writeValueAsString(new Unannotated("here", null));
+
+    assertThat(json).isEqualTo("{\"present\":\"here\"}");
+  }
 }

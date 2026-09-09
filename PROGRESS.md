@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-09 · **Current position:** M6 complete, session S17 of 24
+**Last updated:** 2026-09-09 · **Current position:** M7 in progress, session S18 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -14,10 +14,10 @@ M3 ██████████  3/3              complete
 M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
-M7 ░░░░░░░░░░  0/2              ← next
+M7 █████░░░░░  1/2              ← in progress
 M8 ░░░░░░░░░░  0/3
 M9 ░░░░░░░░░░  0/2
-               17/24 sessions
+               18/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -180,15 +180,21 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 
 **Capability:** commit → tested → built → deployed, with no manual step.
 
-- [ ] **S18** — GitHub Actions CI + ghcr.io publishing
+- [x] **S18** — GitHub Actions CI + ghcr.io publishing
 - [ ] **S19** — ArgoCD pull-based GitOps
 
 **Exit criteria**
 
-- [ ] A PR runs fully green, including integration tests against real Kafka and Mongo
-- [ ] A merge to main publishes SHA-tagged images to ghcr.io
-- [ ] Pushing a commit deploys to Kind **unattended**, with no inbound access to the laptop
-- [ ] A deliberately broken test blocks the pipeline
+- [x] A PR runs fully green, including integration tests against real Kafka and Mongo — PR #1,
+  546 tests, 84 of them integration tests against a real broker and database, in 7m32s
+- [x] A merge to main publishes SHA-tagged images to ghcr.io — seven images in 1m19s, tagged
+  `273e44e`, never `latest`
+- [ ] Pushing a commit deploys to Kind **unattended**, with no inbound access to the laptop — S19
+- [x] A deliberately broken test blocks the pipeline — PR #2 ran red and GitHub reported it
+  `BLOCKED`; it was closed rather than merged
+
+**Three of four pass as of 2026-09-09.** The milestone stays open on the fourth, which is what S19
+is for: images now exist at ghcr.io and nothing pulls them.
 
 ---
 
@@ -1944,23 +1950,119 @@ chart's own naming suggests.
 
 ---
 
+## S18 — A machine that runs the tests · 2026-09-09 · M7
+
+Everything this platform needs in order to be built, tested and deployed has been stated in files
+since M6: a POM that produces seven images without a Docker daemon, and a kustomize overlay that
+describes twelve pods. Nothing did either of those on anybody's behalf. "The build is green" has
+meant "green on the author's laptop, with whatever that laptop happens to have installed" — a claim
+nobody else can check and one that quietly depends on a Windows machine with a particular Docker,
+a particular JDK and a `.m2` full of things somebody downloaded a month ago. S18 hands both jobs to
+a machine that has never seen this project.
+
+**Built:** one workflow with four jobs — the Java build including every integration test, the
+dashboard's lint/tests/typecheck, a render of all three kustomize layers, and a publish step gated
+behind the other three; a `publish` profile in the root POM binding Jib's registry-push goal; OCI
+source and revision annotations on all seven images; branch protection on `main`; and one test that
+closes a hole the exercise itself uncovered.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| Where publishing lives | **The same workflow as the tests**, as a fourth job that `needs` the other three | A separate publishing workflow triggered by the first one finishing. `needs` is a hard dependency, so a failing test does not merely mark a pull request red — it makes the image that would have been built impossible. A second workflow would have to watch this one and decide for itself whether the result was good enough, which is the same rule written twice in a place where the two copies can disagree |
+| How images reach the registry | **Jib's `build` goal**, which assembles layers and pushes them over HTTPS | `jib:dockerBuild` followed by `docker push`, or a Dockerfile per service. `build` needs no Docker daemon at all, so the publishing job is an ordinary Maven run rather than a privileged one — the reason Jib was chosen in S17, now actually collected |
+| The tag | **The full commit SHA** | `latest`, or the POM version. A moving tag cannot be rolled back to and cannot answer "what is actually running", because two machines can hold different images under one name. A SHA names exactly one commit, so a pod's image reference is a link into this repository's history |
+| Registry credentials | **The token GitHub mints for the job**, which expires when the job ends and can touch only this repository's packages | A personal access token in repository secrets: a long-lived credential that outlives the job, the laptop and eventually the person, stored somewhere it can be printed by any workflow anybody adds |
+| Four jobs rather than one | **Four**, running in parallel | One job doing everything in sequence. They fail for unrelated reasons, and a red tick labelled "Dashboard build and tests" is worth more than a failure at line 340 of a single log. Wall-clock cost becomes the slowest rather than the sum |
+| How manifests are checked | **`kubectl kustomize`**, a client-side render of all three layers | `kubectl apply --dry-run=server`, which would also validate against the Kubernetes API — and cannot run here at all: the `fleet` namespace is created by the same apply, so a server dry run on a clean cluster reports `namespaces "fleet" not found` and reads as a manifest error |
+| Whether protection applies to the owner | **Yes — `enforce_admins: true`** | Leaving admins exempt, which is the default and the friendly choice. The person most likely to merge something red at midnight is the person who wrote it; a rule that exempts them is advice |
+| Required reviews | **None** | Requiring one approving review, which is correct on a team and unsatisfiable on a repository with one contributor — the rule would simply mean nothing can ever merge |
+
+### What surprised me
+
+**The experiment that was supposed to prove the gate found a hole in the tests instead.** The
+deliberately broken branch turned off null omission in the shared JSON configuration — a real
+regression, since every event on every topic would grow explicit nulls. The expectation was a
+failure in `libs/events`, the module that owns that setting, within a minute. What happened was that
+all 36 of that module's tests passed, including the one named `omitsNulls`, and the build went red
+seven minutes later in the *simulator's* emitter tests. The cause: every event class carries
+`@JsonInclude(NON_NULL)` of its own, and a class-level annotation beats the mapper's default — so
+the test named after the behaviour passes whatever the mapper is configured to do. The types that
+actually depend on the default are the simulator's wire payloads, which annotate nothing. A shared
+mapper's configuration has to be asserted against something that cannot annotate its way out of it;
+there is now such a test, and it fails in under a second.
+
+**A green build on the first attempt said something about S1, not about S18.** Nothing in the
+repository assumed the machine it was written on: `mvnw` is committed mode `100755`, `.gitattributes`
+forces LF on every text file, host ports are configuration rather than defaults, and no test reads a
+Windows path. Work done in the first session for reasons that looked pedantic at the time is exactly
+why a Linux runner needed no accommodation at all.
+
+**The integration tests are most of the pipeline, and two classes are most of the tests.** The Java
+job takes about 7m20s, of which `ExceptionServiceIT` is 143 seconds and `EtaIT` 99 — both of which
+spend nearly all of that waiting for simulated time to pass, not computing. The dashboard job takes
+16 seconds and the manifest render 8. Any future effort to make CI faster has exactly two places to
+look.
+
+**Jib warns that the base image is a tag rather than a digest**, on every build: `eclipse-temurin:
+21-jre-alpine` is whatever that tag pointed at this morning. The image is reproducible in every
+respect this project controls — a fixed creation time, layers derived from the classpath — and not
+reproducible in the one it does not. Left as it is deliberately, and written down rather than
+suppressed: pinning the digest means a manual bump for every base-image security update, which on a
+project with no dependency automation is a pin that silently goes stale.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| PR #1, all three test jobs | Green on the first attempt. No action version, path or line ending needed fixing |
+| `./mvnw verify` on a clean Ubuntu runner | **7m32s**, 546 tests, of which 84 are integration tests across nine classes against a real Kafka and a real MongoDB started by Testcontainers |
+| Slowest integration classes | `ExceptionServiceIT` 143s, `EtaIT` 99s, `IngestGatewayIT` 39s, `GeofenceIT` 36s |
+| Publish job on merge to `main` | **1m19s** for all seven images. The six JVM images take 4-5 seconds each, because Jib pushes only the layers that changed |
+| What was published | `ghcr.io/goutham-hegde/fleet-tracker/<name>:273e44ea18249cab17a4b8b79ebfc1dd7439288c` for `ingest-gateway`, `tracking-processor`, `shipment-service`, `exception-service`, `dashboard-api`, `fleet-simulator` and `dashboard` |
+| Branch protection | Three required checks, no force-push, no deletion, `enforce_admins: true`, no review requirement |
+| PR #2, deliberately broken | Java job failed at 7m18s; GitHub reported `mergeStateStatus: BLOCKED`. Closed rather than merged, branch deleted |
+| The new `libs/events` test | Fails with the default flipped to `ALWAYS`, passes with it restored, in under a second and in the first module of the reactor |
+
+### Left open
+
+- **Nothing deploys.** Images exist at ghcr.io and nothing pulls them: the local overlay still says
+  `imagePullPolicy: Never` and `0.1.0-SNAPSHOT`, because they are loaded into Kind by hand. Closing
+  that is S19 and it is M7's remaining exit criterion — a commit that deploys to this laptop's
+  cluster unattended, with no inbound access to the laptop.
+- **Package visibility is a manual setting.** A package published by a workflow can land private
+  even from a public repository, and a private package is one nothing can pull anonymously.
+- **Nothing scans anything.** No dependency audit, no image scan, no SBOM. A pipeline that builds
+  and publishes without ever asking what is inside what it published is incomplete, and M9 is where
+  that lands.
+- **The pipeline tests one operating system.** Every job runs on Ubuntu; the machine this is
+  developed on is Windows, and nothing checks that the two still agree.
+- Carried forward: the archiver is still an empty directory; the wire contract between the browser
+  and the API is still hand-written on both sides with nothing checking it at build time; the
+  basemap is still OpenStreetMap's own tile servers; and the exception service's last-seen map is
+  still in memory.
+
+---
+
 ## Next up
 
-**S18 — continuous integration, and the start of M7.** Everything the platform needs to be built
-and deployed is now stated in files: a POM that produces seven images without a Docker daemon, and a
-kustomize overlay that describes twelve pods. Nothing yet does either of those on anybody's behalf.
-S18 adds GitHub Actions — a workflow that runs `./mvnw verify` on a pull request, integration tests
-and all, and publishes SHA-tagged images to ghcr.io on a merge to main.
+**S19 — the last step of M7: a commit that deploys itself.** Images now exist at ghcr.io, tagged
+with the commit that produced them, and nothing pulls them. The cluster on this laptop is still fed
+by hand: `kind load docker-image`, an `imagePullPolicy: Never` that says so, and a tag frozen at
+`0.1.0-SNAPSHOT`.
 
-Its exit criteria: a PR runs fully green including integration tests against real Kafka and Mongo; a
-merge to main publishes SHA-tagged images; and a deliberately broken test blocks the pipeline.
+The remaining exit criterion is deliberately awkward: **pushing a commit deploys to Kind
+unattended, with no inbound access to the laptop.** A laptop behind a home router has no address CI
+can reach, and opening one would be the wrong answer even if it were easy. So the deployment is
+*pulled* rather than pushed: ArgoCD runs inside the cluster, watches this repository, and applies
+what it finds. Nothing outside the house ever connects in.
 
-Four things S18 should know. The integration tests are Testcontainers-backed, so the runner needs a
-Docker daemon — GitHub's Ubuntu runners have one, and `mvnw` is already committed mode `100755` with
-`.gitattributes` forcing LF, which is what stops a Windows checkout dying on the runner with `bad
-interpreter`. Image publishing needs `jib:build` rather than `jib:dockerBuild`: the first pushes to
-a registry and needs no daemon at all, which is why the Jib configuration was written to make that a
-one-word change. The image tag is a property (`image.tag`) in the root POM specifically so CI can
-override it with a commit SHA. And ghcr.io is free and unlimited for a public repository, which is
-why images go there rather than to ECR.
+Three things S19 will have to settle. What CI writes after publishing, so that a new image becomes a
+change ArgoCD can see — a commit that rewrites the tag in an overlay is the usual answer, and it
+means the pipeline commits to its own repository, which needs care to avoid a build loop. Where that
+overlay lives, since `deploy/overlays/local` is explicitly the hand-fed one and states
+`imagePullPolicy: Never`; a pulled deployment needs an overlay that names the registry instead.
+And whether ghcr.io packages are public, because a private package needs a pull secret in the
+cluster and a public one needs nothing at all.
 
