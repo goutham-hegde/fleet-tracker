@@ -41,6 +41,8 @@ log "Destroying the bootstrap stack: state bucket, then budget"
 tf bootstrap destroy -input=false "${APPROVE[@]}"
 
 if command -v gh >/dev/null 2>&1; then
-  gh variable delete AWS_ROLE_ARN >/dev/null 2>&1 && ok "AWS_ROLE_ARN repository variable removed" || true
+  for v in AWS_ROLE_ARN AWS_TRUSTED_SUBJECT; do
+    gh variable delete "$v" >/dev/null 2>&1 && ok "$v repository variable removed" || true
+  done
 fi
 ok "Nothing of this project's remains in AWS. Check the billing console at the end of the month."
