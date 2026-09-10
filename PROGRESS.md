@@ -189,12 +189,13 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
   546 tests, 84 of them integration tests against a real broker and database, in 7m32s
 - [x] A merge to main publishes SHA-tagged images to ghcr.io — seven images in 1m19s, tagged
   `273e44e`, never `latest`
-- [ ] Pushing a commit deploys to Kind **unattended**, with no inbound access to the laptop — S19
+- [x] Pushing a commit deploys to Kind **unattended**, with no inbound access to the laptop —
+  ArgoCD inside the cluster polls the `deploy` branch outbound; CI stamps the published tags onto
+  it after publishing. Nothing connects in
 - [x] A deliberately broken test blocks the pipeline — PR #2 ran red and GitHub reported it
   `BLOCKED`; it was closed rather than merged
 
-**Three of four pass as of 2026-09-09.** The milestone stays open on the fourth, which is what S19
-is for: images now exist at ghcr.io and nothing pulls them.
+**All four pass as of 2026-09-10. M7 is complete and M8 is unblocked.**
 
 ---
 
@@ -2045,24 +2046,114 @@ project with no dependency automation is a pin that silently goes stale.
 
 ---
 
-## Next up
+## S19 — A commit that deploys itself · 2026-09-10 · M7
 
-**S19 — the last step of M7: a commit that deploys itself.** Images now exist at ghcr.io, tagged
-with the commit that produced them, and nothing pulls them. The cluster on this laptop is still fed
-by hand: `kind load docker-image`, an `imagePullPolicy: Never` that says so, and a tag frozen at
+S18 left the pipeline one step short of the milestone. Seven images existed at ghcr.io, each tagged
+with the commit that produced it, and nothing anywhere pulled them: the cluster on this laptop was
+still fed by hand with `kind load`, an `imagePullPolicy: Never` that said so, and a tag frozen at
 `0.1.0-SNAPSHOT`.
 
-The remaining exit criterion is deliberately awkward: **pushing a commit deploys to Kind
-unattended, with no inbound access to the laptop.** A laptop behind a home router has no address CI
-can reach, and opening one would be the wrong answer even if it were easy. So the deployment is
-*pulled* rather than pushed: ArgoCD runs inside the cluster, watches this repository, and applies
-what it finds. Nothing outside the house ever connects in.
+The remaining exit criterion is deliberately awkward — a commit must deploy **unattended, with no
+inbound access to the laptop**. The cluster is a Kind node behind a home router. It has no public
+address, and arranging one so that a build machine on the internet could administer a home network's
+Kubernetes API would be the wrong answer even if it were easy. So the direction of deployment is
+reversed rather than the network opened: **ArgoCD runs inside the cluster, polls this repository
+outbound, and applies what it finds.** The only connection involved is the one a `git pull` makes,
+and the laptop makes it.
 
-Three things S19 will have to settle. What CI writes after publishing, so that a new image becomes a
-change ArgoCD can see — a commit that rewrites the tag in an overlay is the usual answer, and it
-means the pipeline commits to its own repository, which needs care to avoid a build loop. Where that
-overlay lives, since `deploy/overlays/local` is explicitly the hand-fed one and states
-`imagePullPolicy: Never`; a pulled deployment needs an overlay that names the registry instead.
-And whether ghcr.io packages are public, because a private package needs a pull secret in the
-cluster and a public one needs nothing at all.
+**Built:** a second kustomize overlay that pulls SHA-tagged images from ghcr.io; two kustomize
+components holding what both overlays share; an ArgoCD Application and a pinned install script; a
+script that stamps image tags into the overlay and refuses to do it badly; and a fifth CI job that
+publishes the answer to "which build" onto a branch a controller watches.
 
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| Push or pull | **Pull — ArgoCD inside the cluster, polling github.com outbound** | A CI job holding a kubeconfig and running `kubectl apply`. That needs a route from a GitHub runner to a laptop behind a home router: a forwarded port, a tunnel, or a self-hosted runner. All three make a home network's Kubernetes API reachable from outside so that a convenience can be had, and the credential to drive it would have to live in repository secrets |
+| Where CI writes the deployed tag | **An unprotected `deploy` branch, reset to the merged commit on every publish** | Committing to `main`, which is what most GitOps pipelines do — and which is closed off here, because S18's protection applies to the Actions token exactly as it applies to a person. The alternative was to add a bypass for the bot, weakening the gate one session after building it, in order to make deployment convenient |
+| What that branch contains | **`main`, plus exactly one commit stamping the tags** | A long-lived branch of its own with the manifests copied into it. Reset-and-force-push means it can never become a divergent second copy: everything but the tags is the merged commit, byte for byte. Its history is rewritten every time, and nothing reads that history |
+| What stops a build loop | **Nothing triggers CI on `deploy`** | A `[skip ci]` marker in the commit message, or a path filter. Both are opt-outs that a later edit can silently undo; a branch the workflow was never listening to cannot start a run at all |
+| Which overlay ArgoCD applies | **A new `deploy/overlays/gitops`, pulling by commit SHA** | Teaching the existing local overlay to do both. That overlay's whole content is "images come from this laptop's Docker daemon and must never be pulled", which is the exact opposite of what a controller inside the cluster needs |
+| What the two overlays share | **Two kustomize components — the simulated fleet, and the lag autoscaler** | A copy of each manifest in each overlay. Two copies of the simulator's arguments would have disagreed the first time one was changed. Neither can move into the base: a real deployment has real trucks, and a ScaledObject is a kind the API server rejects until KEDA is installed |
+| How tags are rewritten | **A sed script that checks it found exactly seven, and checks again afterwards** | `kustomize edit set image`, which is a second binary to install in CI and which reformats the file, discarding every comment in it. The comments are most of that file's value |
+| Sync policy | **Automated, with prune and self-heal** | Manual sync, or automated without self-heal. Without prune, deleting a manifest leaves the workload running and the repository stops being an accurate statement of what exists — which is the entire claim being made. Without self-heal, a hand-edit at 2am survives, which is how the repository and the cluster part company |
+| Whether the Application is itself deployed by git | **No — applied once, by hand, by the install script** | An "app of apps", one Application applied by hand whose job is to create the rest from git. With a single application that is the same bootstrap with a layer on top. Something has to make the first move: a controller that deploys what git says cannot itself have been deployed by what git says |
+| ArgoCD install | **The full distribution, pinned at v3.5.2** | The `core` install, which drops the API server, the web interface and three controllers and is a few hundred megabytes lighter. The interface is most of how this session can be *shown* to work, and the laptop had the room |
+
+### What surprised me
+
+**ArgoCD reported the two StatefulSets permanently out of sync while every sync reported success.**
+The difference it kept finding was in a field this repository does not set: the API server defaults
+`volumeMode: Filesystem` into a volume claim template that omits one, and stores a `status` beside
+it, so the object read back is never the object sent. Normally the next sync settles a difference
+like that. It cannot here, because a StatefulSet's `volumeClaimTemplates` are **immutable** — the
+only part of a StatefulSet spec that may be changed in place is `replicas`. So the loop would have
+run for ever: out of sync, sync, succeed, out of sync. Nothing was broken, nothing was logged as an
+error, and the one signal this whole design is judged by would simply never have appeared.
+
+**The generalisable version of that is the more useful one.** Automated self-heal means ArgoCD puts
+the cluster back whenever it differs from git, which is a trap wherever something *else* legitimately
+writes to a field it manages. There are two such fields here and they are unalike: one is written by
+another controller (KEDA owns the tracking processor's replica count, and without an exception a
+scale-out to three pods reads as drift and is reverted once per reconcile loop — the autoscaler
+installed, correct, and entirely without effect), and one is written by nobody at all, only defaulted
+by the API server. Both need declaring; only the first is the case anybody warns you about.
+
+**Verifying the drift rules meant checking who actually made a change, not that it changed.** Scaling
+a deployment by hand and watching it return to one proves nothing on its own — two different
+controllers would produce that same picture. Kubernetes records a manager per field: the dashboard
+API's replica count was written back by `argocd-controller` within a second, and the tracking
+processor's by `kube-controller-manager`, which is the autoscaler doing its own job while ArgoCD
+stayed out of it. The two cases look identical from outside and are opposite in meaning.
+
+**The images were already anonymously pullable, which closed a question the previous session had left
+open.** A package published from a public repository can land private, and a private one needs a pull
+secret in the cluster. Rather than trust the web interface, the check was to ask the registry for a
+token with no credentials at all and fetch a manifest with it: seven images, seven `200`s.
+
+**Moving two files into shared components is the kind of refactor that is easy to get subtly wrong,
+so it was checked by rendering rather than by reading.** The local overlay's full output was captured
+before the change and compared with the output after: byte-identical, which is a stronger statement
+than "the tests still pass" for a change whose entire product is a rendered file.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| The local overlay after the refactor | `kubectl kustomize deploy/overlays/local` renders **byte-identically** to before the two components were extracted |
+| ghcr.io package visibility | All seven images at `a925aaa…` fetched with an **unauthenticated** registry token: seven `200`s. No pull secret is needed anywhere |
+| ArgoCD sync | `Synced / Healthy` against the `deploy` branch, having replaced all nine workloads with images pulled from ghcr.io and tagged with a commit SHA |
+| The platform, after being deployed by a controller | 64 shipments and 10 open exceptions on the dashboard API — nothing on this laptop built or loaded any of those images |
+| Self-heal | `kubectl scale deployment/dashboard-api --replicas=3` was reverted to 1 in **under a second**, and the field's manager is recorded as `argocd-controller` |
+| The KEDA exception | `kubectl scale deployment/tracking-processor --replicas=2` was returned to 1 by `kube-controller-manager` — the autoscaler, not ArgoCD — and the application never left `Synced` |
+| The tag stamper | Refuses a tag containing characters a Docker reference may not hold, and refuses to edit the file at all unless it finds exactly seven tags to rewrite |
+| The pipeline on merge to `main` | All five jobs green: tests **7m9s**, publish **1m7s**, and the new stamping job **7s** |
+| What the pipeline wrote | Branch `deploy` at `30c36a3`, one commit — "Run 4ec6ec7" — on top of the merged commit, with all seven tags reading `4ec6ec7e8028…` |
+| **The exit criterion** | ArgoCD picked the commit up **on its own** within six minutes of the push, with nothing typed at the cluster, and all seven workloads were running the new images by 05:23Z — **14m45s from merge to deployed** |
+| The platform, deployed by nobody | 64 shipments and 17 open exceptions, `Synced / Healthy` |
+
+---
+
+## Next up
+
+**S20 — the first session outside this house.** M7 closed with a laptop that deploys itself; M8
+takes the same platform to a public address, with real identity and access management, and with a
+bill of exactly nothing.
+
+S20 is groundwork rather than capability: an AWS account, a **budget alert before any resource
+exists**, a Terraform base, and — the interesting part — GitHub Actions assuming an AWS role through
+**OIDC**, so that the pipeline gains the ability to touch AWS without a single stored credential.
+That is the same argument S18 made about registry passwords, one level up: a long-lived access key
+in repository secrets outlives the job, the laptop and eventually the person.
+
+Three things S20 will have to settle. What the free-forever boundary actually is, since EKS, NAT
+gateways, load balancers and managed Kafka are already excluded by decision and the reasoning owes an
+ADR. How much of the platform can meaningfully exist there at all — the answer is not "all of it",
+and deciding what a cloud presence *demonstrates* comes before deciding what to deploy. And what the
+cloud overlay replaces: the local and GitOps overlays differ only in where images come from, so a
+third one should differ only in the facts of that place, and the base must not learn anything new.
+
+Also carried into M8: the dashboard's basemap still uses OpenStreetMap's own tile servers, whose
+usage policy reserves them for light traffic. A public URL is exactly the traffic that policy is
+about, so the keyed vector style behind that environment variable stops being optional.
