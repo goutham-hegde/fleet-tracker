@@ -6,7 +6,7 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** in development — milestone M7 of M9, session 18 of 24.
+> **Status:** in development — milestone M7 of M9 complete, session 19 of 24.
 > See **[PROGRESS.md](PROGRESS.md)** for the build log, decisions taken, and what is next.
 > Architecture decision records land in `docs/adr/` as they are written.
 
@@ -684,6 +684,7 @@ workflow is `.github/workflows/ci.yml`.
 | Dashboard build and tests | `npm ci`, lint, `vitest`, `vite build` | Different language, different toolchain, different reasons to fail |
 | Kustomize overlays render | `kubectl kustomize` over all three layers | Catches a resource listed but missing, or a patch matching nothing, in five seconds and with no cluster |
 | Publish images to ghcr.io | Jib and one `docker build` | Only from `main`, and only if the three above passed |
+| Stamp the deployed tag | `scripts/set-image-tag.sh` and a force-push to `deploy` | The only job that writes to the repository, and it never touches `main` |
 
 The three test jobs run at once, so the wall-clock cost is the slowest rather than the sum. They are
 separate rather than one long script because they fail for unrelated reasons, and a failure named
@@ -740,6 +741,107 @@ that experiment also showed is worth keeping: the regression was caught seven mi
 build by the *simulator's* tests, not by the module that owns the setting, because every event class
 carries its own `@JsonInclude` annotation and a class-level annotation beats a mapper default. There
 is now a test in `libs/events` that fails in seconds instead.
+
+## Continuous delivery
+
+A commit merged to `main` ends up running on the cluster with nobody touching a terminal. The
+awkward part is that the cluster is a Kind node on a laptop behind a home router: it has no public
+address, and nothing on GitHub's runners can open a connection to it. Forwarding a port so that a
+build machine on the internet could administer a home network's Kubernetes API would be a bad trade
+even if it were easy.
+
+So the direction is reversed. **ArgoCD runs inside the cluster and polls this repository outbound**,
+applying whatever it finds. The only connection involved is the same one a `git pull` makes, and it
+is made from the laptop. The laptop can be asleep for a day and will catch up when it wakes.
+
+```
+merge to main
+   ↓
+CI: tests → publish seven images to ghcr.io, tagged with the commit SHA
+   ↓
+CI: reset the `deploy` branch to that commit, stamp the tags into
+    deploy/overlays/gitops, force-push
+   ↓                                            (github.com — no inbound connection)
+ArgoCD, inside the cluster, polls `deploy` every three minutes
+   ↓
+kubectl apply, by a controller, from the manifests in this repository
+```
+
+### Why a `deploy` branch
+
+`main` is protected, and the protection applies to the Actions token exactly as it applies to a
+person, so the publish job **cannot commit to it**. The usual GitOps move — CI rewrites the image
+tag in an overlay and commits it back — is therefore closed off unless the gate is weakened, and
+weakening the gate to make deployment convenient is the wrong way round.
+
+The `deploy` branch is *reset* to the merged commit on every publish and carries exactly one extra
+commit, the one that stamps the tags. It is never a second, divergent copy of the manifests: it is
+`main`, plus the answer to "which build". Its history is rewritten every time and nothing reads that
+history.
+
+It also breaks the loop this design otherwise has. CI runs on pull requests and on pushes to `main`;
+nothing triggers on `deploy`. Without that, the pipeline would publish an image, commit the tag,
+build its own commit, publish again, and keep going.
+
+### Two overlays, differing in one thing
+
+| | `deploy/overlays/local` | `deploy/overlays/gitops` |
+|---|---|---|
+| Images from | this laptop's Docker daemon, via `kind load` | ghcr.io |
+| Tag | `0.1.0-SNAPSHOT`, which no registry has heard of | the full commit SHA |
+| Pull policy | `Never` — a forgotten `kind load` fails loudly | `IfNotPresent` |
+| Applied by | a person typing `kubectl apply -k` | ArgoCD, unattended |
+
+**Apply only one of them at a time.** They name the same Deployments, so a cluster with both applied
+would have the two image references overwriting each other on every apply.
+
+Everything they share is either in the base or in one of two kustomize **components**
+(`deploy/overlays/components/`): the simulated fleet and the lag autoscaler. A component is an
+optional slice of configuration that several overlays can each switch on — the alternative was a
+copy of each manifest in each overlay, and the copies would have drifted the first time the
+simulator's arguments changed. Neither belongs in the base: a real deployment has real trucks, and
+the ScaledObject is a kind the API server does not recognise until KEDA is installed.
+
+### Bringing it up
+
+```bash
+./scripts/keda-up.sh      # first, or the sync fails with `no matches for kind "ScaledObject"`
+./scripts/argocd-up.sh    # installs ArgoCD (pinned) and registers the application
+```
+
+```bash
+kubectl get application -n argocd -w        # Synced / Healthy is the answer
+kubectl describe application/fleet-tracking -n argocd
+kubectl -n argocd annotate app/fleet-tracking argocd.argoproj.io/refresh=hard --overwrite   # poll now
+
+# The web UI. A port-forward rather than a Kind port mapping, because those are fixed at cluster
+# creation and adding one means recreating the cluster.
+kubectl port-forward -n argocd service/argocd-server 8090:443
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+```
+
+To deploy a particular build by hand — a rollback, say — point the overlay at its tag and push the
+branch:
+
+```bash
+./scripts/set-image-tag.sh <commit sha>
+```
+
+### Two fields ArgoCD must be told to ignore
+
+Automated sync with self-heal means ArgoCD puts the cluster back whenever it differs from git. That
+is the point, and it is also a trap wherever something *else* legitimately writes to a field of an
+object ArgoCD manages. Both cases here are in `deploy/argocd/application.yaml`:
+
+- **`/spec/replicas` of the tracking processor.** KEDA writes it. Without the exception, a scale-out
+  to three pods reads as drift from the base's `replicas: 1` and self-heal scales it straight back —
+  once per reconcile loop, for as long as the fleet stays busy. The autoscaler would be installed,
+  correct, and entirely without effect.
+- **`/spec/volumeClaimTemplates` of the two StatefulSets.** Nobody writes these; the API server
+  *defaults* them, adding a `volumeMode` and a `status` that the manifests do not state. So the
+  object read back is never the object sent. Normally the next sync settles such a difference, but a
+  StatefulSet's claim templates are immutable — only `replicas` may change in place — so ArgoCD
+  would re-sync, succeed, find the same difference, and never once report `Synced`.
 
 ## The demo path, without containers
 

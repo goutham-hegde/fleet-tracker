@@ -1,0 +1,75 @@
+# The same platform, on the same laptop, deployed by nobody.
+#
+# This overlay and deploy/overlays/local describe the identical cluster and differ in one thing:
+# where a container image comes from, and therefore who puts it there.
+#
+#   local   images are built on this machine and pushed into the Kind node with `kind load`.
+#           The tag is 0.1.0-SNAPSHOT, which no registry has ever heard of, and the pull policy is
+#           Never so that a forgotten `kind load` fails loudly instead of reaching for ghcr.io.
+#           Applied by a person typing `kubectl apply -k`.
+#
+#   gitops  images are pulled from ghcr.io by tag, and the tag is the full commit SHA that produced
+#           them. Nothing is built here and nothing is loaded here. Applied by ArgoCD, running
+#           inside the cluster, from whatever this file says on the branch it is watching.
+#
+# **Apply only one of the two at a time.** They name the same Deployments, so a cluster with both
+# applied would have the two image references overwriting each other on every apply.
+#
+# ---------------------------------------------------------------------------------------------
+# The tags below are written by CI, not by hand.
+#
+# `.github/workflows/ci.yml` publishes seven images tagged with the commit SHA, then runs
+# scripts/set-image-tag.sh over this file and pushes the result to the `deploy` branch. ArgoCD
+# watches that branch, sees the changed tags, and rolls the cluster forward. That is the entire
+# mechanism -- there is no webhook, no deploy key, and nothing outside this house ever connects in.
+#
+# Why a separate branch rather than main: main is protected, and the protection applies to admins
+# and to the Actions token alike, so CI cannot commit to it. The `deploy` branch is main plus one
+# commit that stamps the tags, reset from main on every publish, so it can never drift into being a
+# second copy of the manifests. Nothing triggers CI on it, which is also what stops the pipeline
+# from building its own commits for ever.
+#
+# The tags are all the same SHA today and always will be under this workflow, because all seven
+# images are published from one commit by one job. They are listed separately anyway: the day one
+# service is rolled back on its own, this is the file that says so, and a single shared value would
+# have to be split before it could express that.
+# ---------------------------------------------------------------------------------------------
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet
+
+resources:
+  - ../../base
+
+components:
+  - ../components/simulated-fleet
+  - ../components/lag-autoscaling
+
+images:
+  - name: ghcr.io/goutham-hegde/fleet-tracker/ingest-gateway
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+  - name: ghcr.io/goutham-hegde/fleet-tracker/tracking-processor
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+  - name: ghcr.io/goutham-hegde/fleet-tracker/shipment-service
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+  - name: ghcr.io/goutham-hegde/fleet-tracker/exception-service
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+  - name: ghcr.io/goutham-hegde/fleet-tracker/dashboard-api
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+  - name: ghcr.io/goutham-hegde/fleet-tracker/dashboard
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+  - name: ghcr.io/goutham-hegde/fleet-tracker/fleet-simulator
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+
+patches:
+  # Stated rather than left to the default, which happens to be the same thing. A tag that is not
+  # `latest` already defaults to IfNotPresent, but the default is a rule about the *name* of the
+  # tag, and this one is a rule about the *contents*: a commit SHA names exactly one build for
+  # ever, so a node that already has it can never be holding a stale copy of it. Writing it down
+  # means the next person does not have to know the naming rule to know the intent.
+  - target:
+      kind: Deployment
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent

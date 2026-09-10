@@ -149,6 +149,13 @@ jobs:
       - name: Render the local overlay
         run: kubectl kustomize deploy/overlays/local > /dev/null
 
+      # And the pulled one, which is what ArgoCD actually applies. It shares a base and two
+      # components with the local overlay and differs in where the images come from, so a mistake
+      # in the shared part fails twice here and a mistake in the GitOps part fails only once --
+      # which is itself useful information when reading a red run.
+      - name: Render the GitOps overlay
+        run: kubectl kustomize deploy/overlays/gitops > /dev/null
+
   # ---------------------------------------------------------------------------------------------
   # Publishing. Only from main, and only behind the three jobs above.
   # ---------------------------------------------------------------------------------------------
@@ -239,4 +246,94 @@ jobs:
                          exception-service dashboard-api fleet-simulator dashboard; do
               echo "- \`ghcr.io/goutham-hegde/fleet-tracker/$image:${{ github.sha }}\`"
             done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------------------------
+  # Deployment. Not by connecting to a cluster -- by writing down which build should be running.
+  # ---------------------------------------------------------------------------------------------
+  #
+  # The cluster this deploys to is a Kind node on a laptop behind a home router. It has no public
+  # address, and nothing on GitHub's runners can open a connection to it. Arranging otherwise would
+  # mean exposing a home network's Kubernetes API to the internet so that a build machine could
+  # administer it, which is a bad trade even when it is easy.
+  #
+  # So this job does not deploy anything. It states, in git, which images the cluster should be
+  # running; ArgoCD -- which runs inside the cluster and polls github.com outbound -- notices and
+  # does the rest. The only network connection involved is the same one a `git pull` makes.
+  deploy:
+    name: Stamp the deployed tag onto the deploy branch
+    needs: publish
+    # Same guard as publish. Belt and braces on top of the trigger, and cheap.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # This branch is force-pushed, so two of these running at once would race and the loser's
+    # commit would simply vanish -- with the job reporting success. One at a time, and never
+    # cancelled: a cancelled run here leaves the branch naming an older build than main.
+    concurrency:
+      group: deploy-branch
+      cancel-in-progress: false
+
+    # The only job in this workflow that writes to the repository, and the only one that needs to.
+    # It cannot write to main -- the protection rule applies to this token as it does to everybody
+    # -- which is the whole reason the `deploy` branch exists.
+    permissions:
+      contents: write
+
+    steps:
+      # Full history rather than the default single commit. A shallow clone can be pushed from, but
+      # only by accident: the remote has to already hold every object being referenced, which is
+      # true here and would stop being true the moment anything about this job changed.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Repo-local identity, matching the account that owns this repository. Not the
+      # github-actions[bot] default, because these commits are part of this project's history and
+      # should read as such.
+      - name: Identify the committer
+        run: |
+          git config user.name  "goutham-hegde"
+          git config user.email "goutham2606@gmail.com"
+
+      # One substitution over one file, checked at both ends. See the script for why it refuses to
+      # run unless it finds exactly seven tags to rewrite.
+      - name: Point the GitOps overlay at this build
+        run: ./scripts/set-image-tag.sh "${{ github.sha }}"
+
+      # A last check before anything is published to the branch a controller acts on
+      # unsupervised. The manifests job already rendered the local overlay on this commit; this
+      # renders the one that is actually about to be deployed, with the tags that are actually
+      # about to be used. Five seconds, and it is the difference between a bad tag being caught
+      # here and being caught as an ImagePullBackOff on a laptop nobody is watching.
+      - name: Render the GitOps overlay with the new tags
+        run: kubectl kustomize deploy/overlays/gitops > /dev/null
+
+      # The branch is *reset* to this commit rather than added to. That is what stops it becoming a
+      # second copy of the manifests that quietly diverges from main: `deploy` is always exactly
+      # main, plus one commit that says which build. Its history is rewritten on every publish and
+      # nothing reads that history, so the force is not hiding anything.
+      #
+      # Nothing triggers CI on this branch -- the workflow runs on pull requests and on pushes to
+      # main only. That is deliberate and load-bearing: a pipeline that built its own commits would
+      # publish an image, commit the tag, build that, publish again, and keep going.
+      - name: Push it to the deploy branch
+        run: |
+          git checkout -B deploy
+          git add deploy/overlays/gitops/kustomization.yaml
+          # --allow-empty, for the one case that would otherwise fail a re-run: this workflow run
+          # against a commit whose tags are already stamped produces no change to the file, and
+          # `git commit` treats nothing-to-commit as an error. The branch still has to be pushed,
+          # because the point of the commit is where the branch points, not what it changed.
+          git commit --allow-empty -m "Run ${GITHUB_SHA:0:7}"
+          git push --force origin deploy
+
+      - name: Summarise what was deployed
+        run: |
+          {
+            echo "### Handed to ArgoCD"
+            echo
+            echo "Branch \`deploy\` now names tag \`${{ github.sha }}\`."
+            echo "The cluster picks it up on its next poll -- up to three minutes."
           } >> "$GITHUB_STEP_SUMMARY"
