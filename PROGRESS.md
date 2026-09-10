@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-09 · **Current position:** M7 in progress, session S18 of 24
+**Last updated:** 2026-09-10 · **Current position:** M8 in progress, session S20 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -14,10 +14,10 @@ M3 ██████████  3/3              complete
 M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
-M7 █████░░░░░  1/2              ← in progress
-M8 ░░░░░░░░░░  0/3
+M7 ██████████  2/2              complete
+M8 ███░░░░░░░  1/3              ← in progress
 M9 ░░░░░░░░░░  0/2
-               18/24 sessions
+               20/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -203,7 +203,7 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 
 **Capability:** a public HTTPS URL, real IAM, archived events in S3 — at **$0**.
 
-- [ ] **S20** — AWS account, budget alert, Terraform base, GitHub OIDC
+- [x] **S20** — AWS account, budget alert, Terraform base, GitHub OIDC
 - [ ] **S21** — Archiver writing partitioned events to S3
 - [ ] **S22** — CloudFront + Lambda public demo
 
@@ -2135,24 +2135,132 @@ than "the tests still pass" for a change whose entire product is a rendered file
 
 ---
 
+## S20 — A way in that nobody can leak · 2026-09-10 · M8
+
+The first session outside this house. Groundwork rather than capability: an AWS account, a budget
+alert that exists before anything that could cost money, Terraform state somewhere other than one
+laptop, and GitHub Actions able to act in the account **without a credential stored anywhere**.
+
+The account was opened today on AWS's **Free plan**, which since July 2025 means a credit balance
+rather than twelve months of free services. On that plan a card cannot be charged at all, but the
+account closes after six months unless it is upgraded, so it has a date on it: **2027-03-10**.
+
+**Built:** two Terraform stacks (`infra/bootstrap`, `infra/cloud`); a zero-spend budget; a
+versioned, TLS-only, never-public state bucket; the GitHub OIDC provider and a role trusting exactly
+one subject; `scripts/infra-up.sh` and `infra-down.sh`; three CI jobs; and the first architecture
+decision record, [ADR 0001](docs/adr/0001-aws-at-zero-dollars.md).
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| What runs in AWS | **IAM, a budget, S3 in kilobytes, and later Lambda behind CloudFront. The platform stays on the laptop** | A cloud cluster. Nothing in the always-free allowances can run Kafka or MongoDB: EKS is ~$73/month before a single node, EC2 is credit-funded only, and every public IPv4 address is ~$3.65/month. Up to $200 of credits would buy about two months of EKS and then a bill or a closed account, taking the public URL with it |
+| A cloud overlay | **None.** The two overlays stay two | A third overlay, which the plan at the end of S19 anticipated. It would need a cluster to apply to, and the only $0 cluster is the Kind node |
+| What the budget counts | **Gross cost, credits and refunds excluded, alerting at $0.01 actual** | The defaults, which net credits off. On a credit-based plan the bill reads $0.00 while real resources are consumed, so "the bill is zero" would prove nothing until the credits ran out |
+| When the budget exists | **First.** The state bucket declares `depends_on` it, so Terraform cannot create the bucket before the alarm | Creating it by hand in the console first. Equally early, but then `terraform destroy` would not remove it and nothing would record that it exists |
+| Where state lives | **An S3 bucket made by a small bootstrap stack whose own state is local**, with S3-native locking (Terraform 1.10+) | Local state for everything, where losing one file leaves `destroy` unable to find what it made. Or a DynamoDB lock table, one more resource that the lock file made unnecessary |
+| Bucket encryption | **SSE-S3** | A customer-managed KMS key, which costs $1/month whether used or not |
+| How CI reaches AWS | **OIDC: GitHub signs a statement of who the run is, and STS exchanges it for hour-long credentials** | An access key in repository secrets, which outlives the job, the laptop and eventually the person, and has to be rotated by somebody who remembers it exists |
+| Who may assume the role | **`repo:goutham-hegde@181922465/fleet-tracker@1345975529:ref:refs/heads/main`, by exact match**, with the prefix taken from GitHub's API | A wildcard over the repository (`...:*`), the common shortcut, which admits pull requests. A pull request runs whatever code it contains, so anybody able to open one could act as the role. Also rejected, by experience: the name-only form, which matches nothing here (see below) |
+| What the role may do | **Nothing yet.** `sts get-caller-identity` needs no permission, which is enough to prove the trust | Attaching a policy now "to be ready". Each grant should arrive with the job that needs it and a reason beside it |
+| How the laptop authenticates | **An IAM admin user with MFA, signing in through `aws login`** for short-lived credentials | Access keys in `~/.aws/credentials`, the exact thing this milestone argues against. IAM Identity Center is AWS's recommendation for people, but it brings an Organization and more setup for a one-person account |
+| Region | **ap-south-1 (Mumbai)**, nearest to the simulated lanes | us-east-1. It would only matter for a CloudFront certificate on a custom domain, which the demo does not need |
+| `.terraform.lock.hcl` | **Committed**, pinned for Windows and Linux | Ignored, as it had been since S1. That is backwards: without it CI and a second machine can each resolve a different provider version |
+
+### What surprised me
+
+**Credits make a bill lie.** "AWS billing console reads $0.00" has been an M8 exit criterion since
+the plan was written, and under the post-2025 free tier it is satisfied automatically by any usage
+the credits can absorb. The criterion only means what it says if the thing watching the bill
+ignores credits, which is one line in the budget (`include_credit = false`) and the most important
+line in the stack.
+
+**A pull request should be tested for what it cannot do.** The natural CI check for an OIDC trust is
+that `main` can assume the role. The more valuable one is that a pull request **cannot**, because
+loosening a trust policy produces no error anywhere: it simply lets more in. The PR job therefore
+calls STS directly and passes only on the specific refusal, "Not authorized to perform
+sts:AssumeRoleWithWebIdentity". Being refused because GitHub never issued a token would also be a
+refusal, and would prove nothing about the policy.
+
+**And that check passed for the wrong reason the first time.** The trust policy was written with the
+subject format every example shows, `repo:goutham-hegde/fleet-tracker:ref:refs/heads/main`. The PR
+job printed the subject GitHub actually issued, `repo:goutham-hegde@181922465/fleet-tracker@1345975529:pull_request`,
+and was duly refused. So would `main` have been. GitHub's default subject for this repository
+carries the owner's and repository's numeric ids, and a policy naming the older form matches nothing
+at all. A policy that refuses everything and a policy that refuses correctly produce the same
+refusal, so a negative test on its own could not tell them apart. It was caught only because the
+job printed what it was judging, and only before the merge that would have exposed it.
+
+Two changes. The policy now trusts the ID-bearing subject, with the prefix copied from GitHub's API
+(`actions/oidc/customization/sub`) rather than typed from memory. That's also the stronger form,
+since the ids are never reused and a deleted-and-recreated repository of the same name is refused.
+And the PR job now checks, before it counts a refusal, that its own subject with the event swapped
+for a push to `main` is *exactly* the subject the policy trusts (published by `infra-up.sh` as a
+second repository variable). The refusal can then only be about the event. The check was exercised
+against three mocked cases: the correct policy passes, the original name-only policy now **fails**,
+and a policy that admits pull requests fails.
+
+**`terraform output -raw` exits 0 when there is nothing to output.** Before the bootstrap stack had
+been applied, the script's plan-only mode asked for the bucket name, received an empty string with a
+success code, and went on to initialise the cloud stack against a bucket called nothing. The error
+was about empty values in a backend block and named neither the real cause nor the script. Both
+scripts now test for an empty value rather than trusting the exit code.
+
+**An explicit deny beats administrator access.** The state bucket's TLS-only policy was checked by
+listing it over plain HTTP *as the admin user*, and the request was refused with "explicit deny in a
+resource-based policy". In AWS an explicit deny always wins over any allow, which is what makes a
+bucket policy a real boundary rather than a default.
+
+**`aws login` does not save the region it was given.** `--region` applies to that invocation only,
+so the first bare `aws sts get-caller-identity` afterwards failed with `NoRegion`. Terraform and the
+scripts set their region themselves and were unaffected, which is why this surfaced only at a prompt.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| Identity for Terraform | `aws sts get-caller-identity` → `user/goutham-admin`. `infra-up.sh` refuses to run as root |
+| Bootstrap apply | 8 resources. The budget completed first; the bucket began 2 seconds later |
+| The budget, read back from AWS | Limit 1.0 USD, `IncludeCredit: false`, `IncludeRefund: false`, one notification `ACTUAL > 0.01 ABSOLUTE_VALUE` |
+| The bucket, read back from AWS | `ap-south-1`, versioning `Enabled`, `AES256`, all four public-access blocks `True` |
+| Anonymous HTTPS request to the bucket | `403` |
+| Plain HTTP listing as the admin user | Refused, "explicit deny in a resource-based policy" |
+| Cloud stack, read back from AWS | One OIDC provider; role `fleet-tracker-github-actions` with a 3600 s maximum session, **no attached and no inline policies**, and a trust policy with `StringEquals` on `aud` and `sub` |
+| Idempotence | A second `infra-up.sh` run: **no changes** on both stacks |
+| Terraform in CI | `fmt -check` and `validate` of both stacks on a clean runner, from the committed lock files |
+| The first PR run | Refused, and the job passed. But the printed subject showed the policy could never match anything, `main` included. Not merged |
+| The fix, planned | One in-place change to the role: the `sub` condition, name-only form to ID-bearing form |
+| The strengthened PR check, against mocks | Correct policy: pass. Original name-only policy: **fail**. Policy admitting pull requests: **fail** |
+| The fix, applied and read back from AWS | `sub` = `repo:goutham-hegde@181922465/fleet-tracker@1345975529:ref:refs/heads/main`; `AWS_TRUSTED_SUBJECT` set to the same |
+| **A pull request cannot assume the role** | PR #6 after the fix: token subject `…@1345975529:pull_request`, trusted subject `…@1345975529:ref:refs/heads/main`, differing only in the event, and **refused by the trust policy** |
+| **The exit criterion: a push to main assumes the role** | *Pending the post-merge run* |
+
+---
+
 ## Next up
 
-**S20 — the first session outside this house.** M7 closed with a laptop that deploys itself; M8
-takes the same platform to a public address, with real identity and access management, and with a
-bill of exactly nothing.
+**S21 — the archiver.** `services/archiver` has been an empty directory since M0. It becomes a
+Kafka consumer that writes the event streams into S3 under date and hour partitions, and a replay
+that reads them back. M8's second exit criterion.
 
-S20 is groundwork rather than capability: an AWS account, a **budget alert before any resource
-exists**, a Terraform base, and — the interesting part — GitHub Actions assuming an AWS role through
-**OIDC**, so that the pipeline gains the ability to touch AWS without a single stored credential.
-That is the same argument S18 made about registry passwords, one level up: a long-lived access key
-in repository secrets outlives the job, the laptop and eventually the person.
+Two things S21 has to settle before writing any code.
 
-Three things S20 will have to settle. What the free-forever boundary actually is, since EKS, NAT
-gateways, load balancers and managed Kafka are already excluded by decision and the reasoning owes an
-ADR. How much of the platform can meaningfully exist there at all — the answer is not "all of it",
-and deciding what a cloud presence *demonstrates* comes before deciding what to deploy. And what the
-cloud overlay replaces: the local and GitOps overlays differ only in where images come from, so a
-third one should differ only in the facts of that place, and the base must not learn anything new.
+**Which identity the laptop's archiver uses to write to S3.** This is the first write to AWS from
+somewhere that is not CI, so GitHub's OIDC token is not available, and the whole point of S20 was
+that the answer is not an access key. The candidates are IAM Roles Anywhere (a certificate the
+cluster holds, exchanged for temporary credentials against a trust anchor this project uploads,
+which is free as long as the certificate authority is not AWS's managed one) and an IAM user whose
+key can do exactly one thing to one prefix. The second is simpler and is precisely the credential
+this milestone set out not to have.
+
+**The write pattern is a cost decision.** S3's free allowance, where it applies, is counted in
+requests as well as bytes: about 2,000 PUTs a month. One object per event would spend that in
+minutes. One object per topic per hour is roughly 2,200 a month for three topics, which is already
+over. So batching, and the partition granularity, fall out of the bill before they fall out of any
+query pattern.
+
+Carried from S20: the CI role has no permissions, and S21/S22 attach the first. The Free-plan
+account must be upgraded or wound down (`infra-down.sh` first) before **2027-03-10**.
 
 Also carried into M8: the dashboard's basemap still uses OpenStreetMap's own tile servers, whose
 usage policy reserves them for light traffic. A public URL is exactly the traffic that policy is
