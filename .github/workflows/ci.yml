@@ -157,6 +157,129 @@ jobs:
         run: kubectl kustomize deploy/overlays/gitops > /dev/null
 
   # ---------------------------------------------------------------------------------------------
+  # The Terraform. Same idea as the manifests job: does the description still assemble.
+  # ---------------------------------------------------------------------------------------------
+  terraform:
+    name: Terraform validates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # The same version as the laptop. The committed lock files pin the provider; this pins the
+      # tool that reads them.
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Formatting
+        run: terraform -chdir=infra fmt -recursive -check -diff
+
+      # -backend=false: no state, no credentials, no AWS at all. `validate` checks that every
+      # reference resolves and every argument exists on the provider version the lock file names --
+      # which catches most mistakes a plan would, without an account to plan against.
+      - name: Validate both stacks
+        run: |
+          for stack in bootstrap cloud; do
+            terraform -chdir=infra/$stack init -backend=false -input=false -lockfile=readonly
+            terraform -chdir=infra/$stack validate
+          done
+
+  # ---------------------------------------------------------------------------------------------
+  # AWS, with no stored credential. Two jobs that test the same trust policy from both sides.
+  # ---------------------------------------------------------------------------------------------
+  #
+  # The role's address comes from a repository variable that scripts/infra-up.sh sets and
+  # scripts/infra-down.sh removes. With no cloud presence the variable is absent and both jobs are
+  # skipped rather than failed, so tearing AWS down does not turn the pipeline red.
+  #
+  # On a push to main: become the role. That is M8's first exit criterion, re-proved on every merge.
+  aws-identity:
+    name: Assume the AWS role via OIDC
+    if: >
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && vars.AWS_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # id-token: write is what lets this job ask GitHub for a signed statement of who it is. It is
+    # not a credential for anything by itself; it only becomes one because an AWS trust policy
+    # chose to accept statements with exactly this job's subject.
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      # The one third-party action here that handles cloud credentials, so it is pinned to a
+      # commit rather than a tag: a tag can be moved to point at different code, a commit cannot.
+      - name: Exchange GitHub's token for AWS credentials
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: gha-${{ github.run_id }}
+          aws-region: ap-south-1
+          # Account ids are not secret, but this is a public repository with public logs and
+          # there is no reason to publish one.
+          mask-aws-account-id: true
+
+      # get-caller-identity needs no IAM permission at all, which is why it is the check: it can
+      # only fail if the assumption itself failed. The role has no permissions attached as of S20.
+      - name: Who am I now
+        run: |
+          arn="$(aws sts get-caller-identity --query Arn --output text)"
+          echo "$arn"
+          case "$arn" in
+            *:assumed-role/fleet-tracker-github-actions/gha-*) ;;
+            *) echo "::error::Expected the fleet-tracker-github-actions role, got $arn"; exit 1 ;;
+          esac
+          echo "### Assumed \`fleet-tracker-github-actions\` with no stored credential" >> "$GITHUB_STEP_SUMMARY"
+
+  # On a pull request: try to become the role, and fail the job if it works.
+  #
+  # A pull request runs whatever code it contains, so a trust policy that admitted one would hand
+  # this account to anybody able to open a PR. The policy says main only; this job holds it to that.
+  # It calls STS directly rather than through the action, because it needs to read the refusal --
+  # "denied because of the trust policy" and "denied because the token was never issued" are both
+  # failures, and only the first proves anything.
+  aws-trust:
+    name: A pull request cannot assume the AWS role
+    if: github.event_name == 'pull_request' && vars.AWS_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Ask, and expect to be refused
+        env:
+          ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION: ap-south-1
+        run: |
+          token="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)"
+          [ -n "$token" ] && [ "$token" != null ] || { echo "::error::GitHub issued no token"; exit 1; }
+          echo "::add-mask::$token"
+
+          # The claim the trust policy judges, printed so a reader can see what was refused.
+          python3 - "$token" <<'PY'
+          import base64, json, sys
+          p = sys.argv[1].split(".")[1]
+          print("token subject:", json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))["sub"])
+          PY
+
+          if out="$(aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" \
+                --role-session-name pr-trust-check --web-identity-token "$token" 2>&1)"; then
+            echo "::error::A pull request assumed the role. The trust policy admits more than main."
+            exit 1
+          fi
+          echo "$out" | grep -q "Not authorized to perform sts:AssumeRoleWithWebIdentity" \
+            || { echo "::error::Refused, but not by the trust policy: $out"; exit 1; }
+          echo "Refused by the trust policy, as it should be."
+
+  # ---------------------------------------------------------------------------------------------
   # Publishing. Only from main, and only behind the three jobs above.
   # ---------------------------------------------------------------------------------------------
   #

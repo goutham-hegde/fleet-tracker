@@ -19,8 +19,9 @@ dist/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
-.terraform.lock.hcl
 crash.log
+# .terraform.lock.hcl is committed, deliberately: it pins provider versions and checksums the way
+# package-lock.json does, so a second machine or CI cannot resolve a different provider.
 
 # --- Secrets / local config ---
 .env
