@@ -220,8 +220,10 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           role-session-name: gha-${{ github.run_id }}
           aws-region: ap-south-1
-          # Account ids are not secret, but this is a public repository with public logs and
-          # there is no reason to publish one.
+          # Masks the account id in everything printed after this step, such as the ARN below. It
+          # cannot hide the id inside role-to-assume, which the runner echoes as an input before
+          # the action runs. That is acceptable: AWS does not treat account ids as secret. This is
+          # tidiness in a public log, not a control.
           mask-aws-account-id: true
 
       # get-caller-identity needs no IAM permission at all, which is why it is the check: it can

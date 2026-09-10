@@ -209,7 +209,8 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 
 **Exit criteria**
 
-- [ ] A GitHub Actions job assumes the AWS role with **zero stored credentials**
+- [x] A GitHub Actions job assumes the AWS role with **zero stored credentials** — run
+  `34471965342` on `dd7f802`, and on every merge to `main` since
 - [ ] S3 objects land under correct date/hour partitions and replay reads them back
 - [ ] A public HTTPS URL serves the dashboard; Lambda lookup returns real data
 - [ ] `terraform destroy` removes everything cleanly
@@ -2233,7 +2234,8 @@ scripts set their region themselves and were unaffected, which is why this surfa
 | The strengthened PR check, against mocks | Correct policy: pass. Original name-only policy: **fail**. Policy admitting pull requests: **fail** |
 | The fix, applied and read back from AWS | `sub` = `repo:goutham-hegde@181922465/fleet-tracker@1345975529:ref:refs/heads/main`; `AWS_TRUSTED_SUBJECT` set to the same |
 | **A pull request cannot assume the role** | PR #6 after the fix: token subject `…@1345975529:pull_request`, trusted subject `…@1345975529:ref:refs/heads/main`, differing only in the event, and **refused by the trust policy** |
-| **The exit criterion: a push to main assumes the role** | *Pending the post-merge run* |
+| **The exit criterion: a push to main assumes the role** | Run `34471965342` on `dd7f802`: "Authenticated as assumedRoleId …:gha-34471965342", and the identity check matched `assumed-role/fleet-tracker-github-actions/gha-*`. Ten seconds, no stored credential |
+| Account-id masking | Partial. The ARN printed by the job is masked, but the action echoes its `role-to-assume` input before masking begins, so the account id appears once in the public log. Account ids are not secret; the workflow comment now says what masking does and does not cover |
 
 ---
 
