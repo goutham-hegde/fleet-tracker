@@ -23,6 +23,13 @@ resource "aws_iam_openid_connect_provider" "github" {
   client_id_list = ["sts.amazonaws.com"]
 }
 
+locals {
+  # A push to main of this repository. Published as the AWS_TRUSTED_SUBJECT repository variable so
+  # the pull-request check can confirm it is being refused for being a pull request, not for
+  # carrying a subject in some other format.
+  trusted_subject = "${var.github_subject_prefix}:ref:refs/heads/main"
+}
+
 # The trust policy is the security boundary, and every line of it matters.
 data "aws_iam_policy_document" "github_actions_trust" {
   statement {
@@ -52,18 +59,18 @@ data "aws_iam_policy_document" "github_actions_trust" {
     # one could run code as this role. Only main is reviewed and protected, so only main may act.
     #
     # Note the shape changes if a job declares a GitHub `environment:` -- its subject becomes
-    # "repo:owner/name:environment:<name>" and this condition would refuse it.
+    # "<prefix>:environment:<name>" and this condition would refuse it.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
+      values   = [local.trusted_subject]
     }
   }
 }
 
 resource "aws_iam_role" "github_actions" {
   name               = "fleet-tracker-github-actions"
-  description        = "Assumed by GitHub Actions on pushes to main of ${var.github_repository}, via OIDC."
+  description        = "Assumed by GitHub Actions via OIDC, only as ${local.trusted_subject}."
   assume_role_policy = data.aws_iam_policy_document.github_actions_trust.json
 
   # An hour is the default and the ceiling a job will ever need; the CI jobs finish in minutes.

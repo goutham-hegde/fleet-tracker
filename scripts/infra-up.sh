@@ -3,8 +3,8 @@
 #
 #   1. infra/bootstrap -- the zero-spend budget, then the Terraform state bucket. Local state.
 #   2. infra/cloud     -- everything else, with its state in that bucket.
-#   3. The CI role's ARN is stored as the AWS_ROLE_ARN repository variable, where the workflow
-#      reads it. A variable rather than a secret: an ARN is an address, not a credential.
+#   3. The CI role's ARN and the one subject it trusts are stored as repository variables, where
+#      the workflow reads them. Variables rather than secrets: neither is a credential.
 #
 # Usage:
 #   ./scripts/infra-up.sh              # plan and apply, asking before each apply
@@ -83,13 +83,19 @@ fi
 tf cloud apply -input=false "${APPROVE[@]}"
 
 role_arn="$(tf cloud output -raw github_actions_role_arn)"
+subject="$(tf cloud output -raw github_actions_trusted_subject)"
 ok "CI role: $role_arn"
+ok "trusted: $subject"
 
 # ------------------------------------------------------------------------------------------------
+# Two repository variables. The ARN is what CI asks for. The subject is what the pull-request check
+# compares its own token against, so that a refusal it counts as a pass is a refusal for being a
+# pull request, and not for carrying a subject the policy would never have matched anyway.
 if command -v gh >/dev/null 2>&1; then
-  log "Storing the role ARN as the AWS_ROLE_ARN repository variable"
+  log "Storing AWS_ROLE_ARN and AWS_TRUSTED_SUBJECT as repository variables"
   gh variable set AWS_ROLE_ARN --body "$role_arn" >/dev/null
+  gh variable set AWS_TRUSTED_SUBJECT --body "$subject" >/dev/null
   ok "done"
 else
-  warn "gh not found. Set it by hand: Settings > Secrets and variables > Actions > Variables > AWS_ROLE_ARN"
+  warn "gh not found. Set AWS_ROLE_ARN and AWS_TRUSTED_SUBJECT by hand under Settings > Secrets and variables > Actions > Variables"
 fi

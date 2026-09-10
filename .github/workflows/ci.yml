@@ -243,6 +243,13 @@ jobs:
   # It calls STS directly rather than through the action, because it needs to read the refusal --
   # "denied because of the trust policy" and "denied because the token was never issued" are both
   # failures, and only the first proves anything.
+  #
+  # And it first checks that the refusal can only be *about* being a pull request. S20's first
+  # version skipped this and passed for the wrong reason: the policy expected "repo:owner/name:..."
+  # while GitHub issues "repo:owner@<id>/name@<id>:...", so a pull request was refused -- and so
+  # would main have been. A refusal from a policy that matches nothing looks exactly like a
+  # refusal from a policy that works. So: this token's subject, with its event swapped for a push to
+  # main, must be exactly the subject the policy trusts (AWS_TRUSTED_SUBJECT, set by infra-up.sh).
   aws-trust:
     name: A pull request cannot assume the AWS role
     if: github.event_name == 'pull_request' && vars.AWS_ROLE_ARN != ''
@@ -256,6 +263,7 @@ jobs:
       - name: Ask, and expect to be refused
         env:
           ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          TRUSTED_SUBJECT: ${{ vars.AWS_TRUSTED_SUBJECT }}
           AWS_REGION: ap-south-1
         run: |
           token="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -263,12 +271,26 @@ jobs:
           [ -n "$token" ] && [ "$token" != null ] || { echo "::error::GitHub issued no token"; exit 1; }
           echo "::add-mask::$token"
 
-          # The claim the trust policy judges, printed so a reader can see what was refused.
-          python3 - "$token" <<'PY'
+          # The claim the trust policy judges.
+          sub="$(python3 - "$token" <<'PY'
           import base64, json, sys
           p = sys.argv[1].split(".")[1]
-          print("token subject:", json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))["sub"])
+          print(json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))["sub"])
           PY
+          )"
+          echo "token subject:   $sub"
+          echo "trusted subject: $TRUSTED_SUBJECT"
+
+          # Same repository, same format, differing only in the event -- or the refusal below
+          # proves nothing about the event.
+          case "$sub" in
+            *:pull_request) ;;
+            *) echo "::error::Expected a pull_request subject, got $sub"; exit 1 ;;
+          esac
+          if [ "${sub%:pull_request}:ref:refs/heads/main" != "$TRUSTED_SUBJECT" ]; then
+            echo "::error::The trusted subject is not this repository's main in GitHub's current format, so a refusal here would prove nothing. Check infra/cloud github_subject_prefix."
+            exit 1
+          fi
 
           if out="$(aws sts assume-role-with-web-identity --role-arn "$ROLE_ARN" \
                 --role-session-name pr-trust-check --web-identity-token "$token" 2>&1)"; then
