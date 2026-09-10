@@ -1,0 +1,25 @@
+# A fleet that does not exist, deployed as though it did.
+#
+# This is a kustomize *component* rather than a base or an overlay, and the distinction is worth a
+# paragraph because it is the whole reason this directory exists.
+#
+#   - A base is the thing being configured. Every overlay includes exactly one, and the base knows
+#     nothing about who includes it.
+#   - An overlay is one deployment of that base: a place, with the facts of that place in it.
+#   - A component is an optional slice of configuration that several overlays can each switch on.
+#     It is not a deployment of anything, and on its own it renders nothing useful.
+#
+# Until S19 there was one overlay -- deploy/overlays/local -- so "the simulator" and "this laptop"
+# were the same statement and it lived directly in that directory. S19 adds a second overlay for
+# the same laptop, differing only in where the images come from, and both want the simulated fleet.
+# The choices were to copy the manifest into the second overlay (two files, one of which will be
+# forgotten the next time the simulator's arguments change) or to name the shared slice once. This
+# is the second.
+#
+# It stays out of deploy/base for the reason it always did: a real deployment has real trucks. The
+# base describes a platform, and a traffic generator is not part of one.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - simulator.yaml

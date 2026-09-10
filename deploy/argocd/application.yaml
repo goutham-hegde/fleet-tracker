@@ -1,0 +1,132 @@
+# The one object that turns a repository into a deployment.
+#
+# An ArgoCD Application is a standing instruction: "the cluster over there should look like that
+# directory in that git repository, and if it does not, do something about it." Everything else in
+# this file is a qualification of that sentence.
+#
+# It is applied by hand, once, by scripts/argocd-up.sh -- and that is not an oversight. Something
+# has to make the first move: a controller that deploys what git says cannot itself have been
+# deployed by what git says, because nothing was watching yet. The usual dodge is an "app of apps",
+# one Application applied by hand whose job is to create the others from git; with a single
+# application that is the same bootstrap with an extra layer on top, so it is left out. What it
+# costs is that changing this file requires re-applying it, which is why it holds only the things
+# that do not change: which repository, which branch, which directory.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fleet-tracking
+  namespace: argocd
+  # Without this finalizer, deleting the Application deletes the Application and leaves every
+  # workload it created running -- orphaned, unmanaged, and indistinguishable from something
+  # deployed by hand. With it, ArgoCD cleans up before letting itself be removed.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    # HTTPS and no credentials, because this repository is public. A private one would need a
+    # Secret holding a deploy key or a token, which is the one piece of this design that changes
+    # with visibility -- and the images are public too, which is why there is no imagePullSecret in
+    # the overlay either.
+    repoURL: https://github.com/goutham-hegde/fleet-tracker.git
+
+    # The branch CI writes to after it has published images, never main.
+    #
+    # main is protected -- three required checks, no force-push, and the rule applies to admins and
+    # to the Actions token alike -- so the publish job cannot commit the new image tags to it. The
+    # `deploy` branch is reset to the merged commit on every publish and carries exactly one extra
+    # commit, the one that stamps the tags into deploy/overlays/gitops. So it is never a divergent
+    # copy of the manifests; it is main, plus the answer to "which build".
+    #
+    # It also breaks the loop that this design otherwise has. CI runs on pull requests and on
+    # pushes to main; a push to `deploy` triggers nothing, so the pipeline cannot build its own
+    # commit, publish an image, commit again, and repeat until somebody notices the bill.
+    targetRevision: deploy
+
+    # The pulled overlay, not deploy/overlays/local. The local one names images that exist only in
+    # this laptop's Docker daemon and sets imagePullPolicy: Never; a controller inside the cluster
+    # has no way to produce those and would sit in ErrImageNeverPull for ever.
+    path: deploy/overlays/gitops
+
+  destination:
+    # "The cluster I am running in." ArgoCD can drive remote clusters through registered
+    # credentials; this one deploys to itself, which is what makes the whole thing work from behind
+    # a home router with no inbound access.
+    server: https://kubernetes.default.svc
+    namespace: fleet
+
+  syncPolicy:
+    automated:
+      # Delete resources that git no longer mentions. Without this, removing a manifest removes it
+      # from the description and leaves it running in the cluster, and the repository stops being
+      # an accurate statement of what exists -- which is the entire claim GitOps makes.
+      #
+      # It is safe here for a reason worth stating: prune only ever deletes objects ArgoCD created
+      # from this source, and deleting a StatefulSet does not delete its PersistentVolumeClaims. So
+      # even the worst case -- somebody deletes kafka/statefulset.yaml -- costs a broker, not the
+      # log directory it was keeping.
+      prune: true
+
+      # Put the cluster back when somebody changes it by hand. `kubectl edit` on a live Deployment
+      # is how a fix gets made at 2am and how it gets lost at 9am; with self-heal the fix survives
+      # only if it is committed, which is the point.
+      selfHeal: true
+
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 5m
+
+    syncOptions:
+      # The namespace is created by the base (platform/namespace.yaml), so ArgoCD does not need to
+      # invent one. Left false deliberately: two things creating the same namespace differ over who
+      # owns its labels.
+      - CreateNamespace=false
+      # Server-side apply, for the same reason scripts/keda-up.sh uses it. A client-side apply
+      # stores the entire previous manifest in a last-applied-configuration annotation, and an
+      # annotation has a 256 kB ceiling that large resources reach.
+      - ServerSideApply=true
+
+  # Ten previous syncs, which is what `argocd app rollback` can reach back to. Cheap, and the
+  # difference between a rollback and a git archaeology session.
+  revisionHistoryLimit: 10
+
+  ignoreDifferences:
+    # Kafka's and MongoDB's volume claim templates, which ArgoCD would otherwise report as drifted
+    # for ever -- and which it can never do anything about.
+    #
+    # Two fields are the trouble, and neither is in this repository. The API server defaults
+    # `volumeMode: Filesystem` into a claim template that does not state one, and it stores a
+    # `status: {phase: Pending}` alongside it. So the object read back is not the object sent, and
+    # the difference is manufactured by Kubernetes rather than by anybody editing anything.
+    #
+    # Normally that resolves itself on the next sync. It cannot here, because a StatefulSet's
+    # volumeClaimTemplates are **immutable**: the only field of a StatefulSet spec that may be
+    # changed in place is `replicas`. So ArgoCD would sit at OutOfSync, re-sync on its automated
+    # policy, succeed, and find the same difference again -- for ever, with the app never once
+    # reading Synced, which is the single signal this whole design is judged by.
+    #
+    # Ignoring the whole template costs nothing that was available anyway: a change to it in git
+    # could not be applied to a live StatefulSet even if ArgoCD did notice it. Changing a volume
+    # size here means deleting the StatefulSet (the PersistentVolumeClaims survive that) and
+    # letting it be recreated -- a deliberate act, not something an autosync should attempt.
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates
+    # KEDA owns this Deployment's replica count, and ArgoCD would own it too if left alone -- so a
+    # scale-out to 3 pods would read as configuration drift from the `replicas: 1` in the base, and
+    # self-heal would scale it straight back down. The two controllers would then fight, once per
+    # reconcile loop, for as long as the fleet stayed busy: the autoscaler would be observably
+    # installed, observably correct, and completely without effect.
+    #
+    # This is the general shape of the problem, not a KEDA quirk. Anything that writes to a field
+    # of an object ArgoCD manages has to be told about here, or the two disagree for ever.
+    - group: apps
+      kind: Deployment
+      name: tracking-processor
+      jsonPointers:
+        - /spec/replicas

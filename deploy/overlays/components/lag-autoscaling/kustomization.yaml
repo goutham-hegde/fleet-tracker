@@ -1,0 +1,14 @@
+# Autoscaling the tracking processor on Kafka consumer lag.
+#
+# A component rather than part of the base, for the same reason it was in the local overlay before
+# S19 moved it here: the ScaledObject is a KEDA custom resource, and a cluster without KEDA
+# installed rejects the whole apply with `no matches for kind "ScaledObject"` -- which reads like a
+# broken manifest and is a missing operator. The base must apply to any cluster; this must not.
+#
+# See the manifest itself for why lag rather than CPU, and scripts/keda-up.sh for the operator that
+# makes the kind exist. Both overlays include this, so both require KEDA.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - tracking-processor-scaledobject.yaml

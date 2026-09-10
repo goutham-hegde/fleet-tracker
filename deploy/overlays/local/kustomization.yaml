@@ -1,26 +1,37 @@
-# The local environment: this laptop, a single Kind node, and a simulated fleet.
+# The local environment: this laptop, a single Kind node, and images fed in by hand.
 #
 # `kubectl apply -k deploy/overlays/local` is M6's exit criterion, and this file is what makes the
 # difference between "the platform" and "the platform, here". The base underneath it knows nothing
-# about where it runs; everything in this directory is a fact about this machine:
+# about where it runs; everything named here is a fact about how this deployment is fed:
 #
 #   - images come from the local Docker daemon by way of `kind load`, not from a registry
 #   - the fleet is simulated, because there are no trucks
 #   - the tracking processor autoscales on Kafka lag, which requires KEDA to be installed first
 #
-# A cloud overlay in M8 will replace all three and reuse everything else.
+# As of S19 there is a second overlay -- deploy/overlays/gitops -- deploying the same platform to
+# the same cluster from images pulled off ghcr.io by ArgoCD. The two differ in exactly one thing,
+# which is where a container image comes from; everything they share is either in the base or in
+# one of the two components below. **Only one of them should be applied to the cluster at a time**,
+# because they name the same Deployments and would otherwise take turns overwriting each other's
+# image references.
+#
+# This one is the developer's loop: build, `kind load`, apply, look. The other one is what a commit
+# does on its own.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: fleet
 
 resources:
   - ../../base
-  - simulator.yaml
-  - tracking-processor-scaledobject.yaml
+
+components:
+  - ../components/simulated-fleet
+  - ../components/lag-autoscaling
 
 patches:
   # Never pull. The images are built on this machine and pushed into the Kind node with
-  # `kind load docker-image`; they do not exist at ghcr.io yet, because publishing them is M7.
+  # `kind load docker-image`; the tag they carry (0.1.0-SNAPSHOT, from the POM) is not one CI ever
+  # publishes, so the registry has nothing under that name at all.
   #
   # `Never` rather than `IfNotPresent` deliberately, even though the tag is not `latest` and the
   # default would already be IfNotPresent. IfNotPresent would silently reach for the registry the
