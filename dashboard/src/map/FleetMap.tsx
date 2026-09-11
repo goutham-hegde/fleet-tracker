@@ -32,6 +32,8 @@ import {
 import type { ShipmentDetail } from '../api/types';
 import type { FleetShipment, FleetStore, LngLat } from '../fleet/FleetStore';
 import { BASEMAP, INITIAL_VIEW } from './basemap';
+// Before any map exists: tells MapLibre where its worker is. See worker.ts for why this is needed.
+import './worker';
 
 /** Below this zoom, every truck's label is hidden — sixty-four of them overlap into a smear. */
 const LABEL_ZOOM = 5.6;
