@@ -47,21 +47,21 @@ components:
 
 images:
   - name: ghcr.io/goutham-hegde/fleet-tracker/ingest-gateway
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
   - name: ghcr.io/goutham-hegde/fleet-tracker/tracking-processor
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
   - name: ghcr.io/goutham-hegde/fleet-tracker/shipment-service
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
   - name: ghcr.io/goutham-hegde/fleet-tracker/exception-service
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
   - name: ghcr.io/goutham-hegde/fleet-tracker/dashboard-api
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
   - name: ghcr.io/goutham-hegde/fleet-tracker/dashboard
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
   - name: ghcr.io/goutham-hegde/fleet-tracker/fleet-simulator
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
   - name: ghcr.io/goutham-hegde/fleet-tracker/archiver
-    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+    newTag: e5381bbb5bbf2edf3c66710822e4ece58bdf30ec
 
 patches:
   # Stated rather than left to the default, which happens to be the same thing. A tag that is not
