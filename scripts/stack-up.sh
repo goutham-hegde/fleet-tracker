@@ -2,7 +2,7 @@
 # The whole platform, in the cluster, from one command.
 #
 # M5's scripts/demo.sh brought the same platform up as seven jars on the host. This brings it up as
-# manifests: seven images, twelve pods, and nothing running on the laptop except Docker. The
+# manifests: eight images, thirteen pods, and nothing running on the laptop except Docker. The
 # difference matters for one reason above all others -- what this script produces is a description
 # of the platform that a machine can apply, so the same description can be applied by a CI job in
 # M7 and by a cloud cluster in M8. A shell script that starts jars can only ever be run by the
@@ -108,14 +108,31 @@ kubectl apply -k "$REPO_ROOT/deploy/overlays/local"
 # A rollout that was already running the same image is not restarted by an apply, because nothing
 # in the manifest changed -- the tag is the same even though the bytes behind it are not. This is
 # what makes a rebuilt image appear to have no effect.
+WORKLOADS=(ingest-gateway tracking-processor shipment-service exception-service dashboard-api dashboard fleet-simulator archiver)
+
+# The archiver is the one workload that needs something from outside this machine: the bucket and
+# role that scripts/aws-link.sh writes into the archive-destination ConfigMap from Terraform's
+# outputs. Without AWS it waits, naming the missing ConfigMap, and the rest of the platform is
+# unaffected -- so it is left out of the wait rather than failing the whole bring-up.
+if ! kubectl get configmap/archive-destination -n fleet >/dev/null 2>&1; then
+  if aws sts get-caller-identity >/dev/null 2>&1; then
+    log "Linking the cluster to AWS for the archiver"
+    "$REPO_ROOT/scripts/aws-link.sh" || warn "aws-link.sh failed; the archiver will wait until it succeeds"
+  fi
+fi
+if ! kubectl get configmap/archive-destination -n fleet >/dev/null 2>&1; then
+  warn "No archive-destination ConfigMap, so the archiver will wait. Run: aws login --region ap-south-1 && ./scripts/aws-link.sh"
+  WORKLOADS=("${WORKLOADS[@]/archiver}")
+fi
+
 log "Rolling out the freshly built images"
-for d in ingest-gateway tracking-processor shipment-service exception-service dashboard-api dashboard fleet-simulator; do
-  kubectl rollout restart "deployment/$d" -n fleet >/dev/null
+for d in "${WORKLOADS[@]}"; do
+  [ -n "$d" ] && kubectl rollout restart "deployment/$d" -n fleet >/dev/null
 done
 
 log "Waiting for every workload to pass its probes"
-for d in ingest-gateway tracking-processor shipment-service exception-service dashboard-api dashboard fleet-simulator; do
-  kubectl rollout status "deployment/$d" -n fleet --timeout=300s
+for d in "${WORKLOADS[@]}"; do
+  [ -n "$d" ] && kubectl rollout status "deployment/$d" -n fleet --timeout=300s
 done
 
 echo

@@ -1,7 +1,7 @@
-# The application layer: the five services and the page that reads them.
+# The application layer: the six services and the page that reads them.
 #
 # Split from the platform layer above it (Kafka and MongoDB) because the two have completely
-# different lifecycles. The platform is stateful, is deployed once and is left alone; these six are
+# different lifecycles. The platform is stateful, is deployed once and is left alone; these seven are
 # rebuilt from source and rolled out constantly. Keeping them in separate directories means
 # `kubectl apply -k deploy/base/services` is a thing that can be said.
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -15,3 +15,4 @@ resources:
   - exception-service.yaml
   - dashboard-api.yaml
   - dashboard.yaml
+  - archiver.yaml

@@ -1,0 +1,183 @@
+# The archiver: the four canonical topics, copied into S3 one file per topic per hour.
+#
+# The first workload here that talks to something outside the cluster, and the first with an
+# identity anybody outside the cluster checks. That identity is its service account, `archiver`, and
+# nothing else: there is no access key in this file, in a Secret, or anywhere in the repository.
+#
+# How the pod gets AWS credentials, in the order it happens:
+#
+#   1. The kubelet asks the API server for a token for this pod's service account, with the audience
+#      "sts.amazonaws.com", and writes it to /var/run/secrets/aws/token. It is a signed statement:
+#      "system:serviceaccount:fleet:archiver", issued by
+#      https://fleet-tracker-oidc.s3.ap-south-1.amazonaws.com, valid for an hour.
+#   2. The AWS SDK finds AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE in the environment and hands
+#      the token to STS, asking to become that role.
+#   3. STS fetches the issuer's public key from that public bucket, checks the signature, checks the
+#      role's trust policy names exactly this service account, and returns credentials valid for an
+#      hour. The SDK renews them before they expire; the kubelet renews the token before it does.
+#
+# The environment-specific half -- which bucket, which role -- is not in this file. It comes from
+# the archive-destination ConfigMap that scripts/aws-link.sh writes from Terraform's outputs, so the
+# base names no account. Until that ConfigMap exists the pod waits in CreateContainerConfigError,
+# naming it, which is deliberate: an archiver that started with nowhere to write would consume and
+# commit nothing, and Kafka keeps only a day.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: archiver
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: archiver
+    app.kubernetes.io/part-of: fleet-tracking
+# The ordinary Kubernetes API token is not mounted. The archiver never talks to the API server, and
+# a token it does not need is one fewer thing a compromised process can use.
+automountServiceAccountToken: false
+---
+# The identity replay Jobs run as (scripts/archive-replay.sh). A second account because it is a
+# second role: the archiver may only write the archive, the replay may only read it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: archive-replay
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: archive-replay
+    app.kubernetes.io/part-of: fleet-tracking
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: archiver
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: archiver
+    app.kubernetes.io/part-of: fleet-tracking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: archiver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: archiver
+        app.kubernetes.io/part-of: fleet-tracking
+    spec:
+      serviceAccountName: archiver
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        # The projected token is written readable by this group, so the uid-1000 JVM can read it.
+        fsGroup: 1000
+      containers:
+        - name: archiver
+          image: ghcr.io/goutham-hegde/fleet-tracker/archiver:0.1.0-SNAPSHOT
+          envFrom:
+            - configMapRef:
+                name: platform-endpoints
+          env:
+            - name: FLEET_ARCHIVER_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: archive-destination
+                  key: bucket
+            - name: FLEET_ARCHIVER_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: archive-destination
+                  key: region
+            # Read by the AWS SDK, not by this service's code: together these two select the
+            # web-identity provider in the SDK's default credential chain.
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: archive-destination
+                  key: region
+            - name: AWS_ROLE_ARN
+              valueFrom:
+                configMapKeyRef:
+                  name: archive-destination
+                  key: archiver-role-arn
+            - name: AWS_WEB_IDENTITY_TOKEN_FILE
+              value: /var/run/secrets/aws/token
+            - name: AWS_ROLE_SESSION_NAME
+              value: archiver
+          ports:
+            - name: probe
+              containerPort: 18086
+          resources:
+            # The heap holds up to 96 MB of compressed, unwritten files (max-buffered-size), plus
+            # the one being uploaded. 512Mi leaves that room at MaxRAMPercentage=75.
+            requests:
+              memory: 320Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: aws-token
+              mountPath: /var/run/secrets/aws
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: probe
+            periodSeconds: 3
+            failureThreshold: 30
+          # Liveness is the one that matters here: the archive loop marks it BROKEN if it dies, and
+          # a restart is the fix. Readiness carries nothing but the application's own state, since
+          # nothing sends this pod traffic -- see application.yaml.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: probe
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: probe
+            periodSeconds: 5
+            failureThreshold: 3
+      # Shutdown writes every open file before the consumer leaves its group. An upload can take a
+      # while on a home connection.
+      terminationGracePeriodSeconds: 90
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # A token for AWS, not for Kubernetes: the audience is STS, so the API server would refuse
+        # it, and STS refuses tokens meant for anyone else. The kubelet replaces it at 80% of its
+        # lifetime; an hour is the ceiling STS accepts for a session anyway.
+        - name: aws-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: sts.amazonaws.com
+                  expirationSeconds: 3600
+                  path: token
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: archiver
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: archiver
+spec:
+  selector:
+    app.kubernetes.io/name: archiver
+  ports:
+    - name: probe
+      port: 18086
+      targetPort: probe

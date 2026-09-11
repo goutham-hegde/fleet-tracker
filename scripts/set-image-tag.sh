@@ -31,12 +31,14 @@ esac
 # The count is checked rather than assumed. A silent zero-substitution -- because the file was
 # reformatted, or a service was renamed -- would leave CI reporting a successful deployment of the
 # previous build, which is the single most confusing thing this script could do.
+EXPECTED=8
+
 BEFORE="$(grep -c '^\( *\)newTag:' "$OVERLAY" || true)"
-[ "$BEFORE" -eq 7 ] || die "Expected 7 newTag lines in the overlay, found $BEFORE. Refusing to edit."
+[ "$BEFORE" -eq "$EXPECTED" ] || die "Expected $EXPECTED newTag lines in the overlay, found $BEFORE. Refusing to edit."
 
 sed -i "s|^\( *\)newTag: .*|\1newTag: $TAG|" "$OVERLAY"
 
 AFTER="$(grep -c "^ *newTag: $TAG$" "$OVERLAY" || true)"
-[ "$AFTER" -eq 7 ] || die "Rewrote $AFTER of 7 tags. The overlay is now inconsistent -- check it."
+[ "$AFTER" -eq "$EXPECTED" ] || die "Rewrote $AFTER of $EXPECTED tags. The overlay is now inconsistent -- check it."
 
-ok "deploy/overlays/gitops now runs tag $TAG (7 images)"
+ok "deploy/overlays/gitops now runs tag $TAG ($EXPECTED images)"

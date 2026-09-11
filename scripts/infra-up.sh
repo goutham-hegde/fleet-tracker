@@ -99,3 +99,9 @@ if command -v gh >/dev/null 2>&1; then
 else
   warn "gh not found. Set AWS_ROLE_ARN and AWS_TRUSTED_SUBJECT by hand under Settings > Secrets and variables > Actions > Variables"
 fi
+
+# The cloud stack describes who the cluster's pods may become; the running cluster still has to
+# publish its public key and be told where the archive is. That half changes every time Kind is
+# recreated, which Terraform cannot see, so it is a separate step.
+echo
+ok "Next, if the cluster is running: ./scripts/aws-link.sh"

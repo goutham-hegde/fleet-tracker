@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the seven container images and put them where the Kind node can see them.
+# Build the eight container images and put them where the Kind node can see them.
 #
 # Kind runs Kubernetes inside a Docker container, and that container has its own image store: an
 # image sitting in the host's Docker daemon is invisible to it. `kind load docker-image` copies one
@@ -18,7 +18,7 @@ require kind "winget install Kubernetes.kind"
 # classpath, the main class and the base image all come from the POM.
 log "Building service images (Jib)"
 "$REPO_ROOT/mvnw" -q -Pimages -DskipTests package -f "$REPO_ROOT/pom.xml"
-ok "five service images and the simulator built"
+ok "six service images and the simulator built"
 
 # The dashboard is the exception: static files and an nginx, so there is no main class to point Jib
 # at and it has a Dockerfile of its own.
@@ -38,6 +38,7 @@ IMAGES=(
   shipment-service
   exception-service
   dashboard-api
+  archiver
   dashboard
   fleet-simulator
 )
@@ -56,7 +57,7 @@ for image in "${IMAGES[@]}"; do
 done
 
 echo
-ok "Seven images built and loaded."
+ok "Eight images built and loaded."
 ok "  A running pod does NOT pick up a new image by itself: the deployment's image reference is"
 ok "  unchanged, so nothing tells Kubernetes anything happened. Restart it explicitly:"
 ok "    kubectl rollout restart deployment/<name> -n fleet"

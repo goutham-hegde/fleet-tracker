@@ -23,7 +23,32 @@ nodes:
         kind: InitConfiguration
         nodeRegistration:
           kubeletExtraArgs:
-            node-labels: "ingress-ready=true"
+            - name: node-labels
+              value: "ingress-ready=true"
+      # The cluster as an identity provider AWS can trust (S21). Every service-account token the
+      # API server signs carries an `iss` claim naming its issuer, and AWS will only accept a token
+      # whose issuer it can reach over HTTPS to fetch the public key that verifies it. The default,
+      # https://kubernetes.default.svc.cluster.local, exists only inside this cluster; this one is a
+      # public S3 bucket that infra/cloud/cluster-oidc.tf creates and scripts/aws-link.sh fills with
+      # this cluster's public key. The private half never leaves the node.
+      #
+      # Like a port mapping, this is fixed when the cluster is created, so adding it meant recreating
+      # the cluster. It must match `cluster_issuer` in Terraform's outputs exactly -- a token whose
+      # issuer differs by one character is refused, with a message that names neither value.
+      #
+      # Harmless without AWS: in-cluster clients have their tokens checked by the API server itself,
+      # which accepts its own issuer whatever it is called.
+      #
+      # A list of name/value pairs rather than a map: Kubernetes 1.31+ uses kubeadm's v1beta4
+      # configuration, which changed the shape of every extraArgs block.
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            - name: service-account-issuer
+              value: https://fleet-tracker-oidc.s3.ap-south-1.amazonaws.com
+            - name: service-account-jwks-uri
+              value: https://fleet-tracker-oidc.s3.ap-south-1.amazonaws.com/openid/v1/jwks
     extraPortMappings:
       # dashboard            -> http://localhost:18080
       - containerPort: 30080

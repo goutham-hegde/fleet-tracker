@@ -355,7 +355,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Six images -- the five services and the simulator -- pushed straight to the registry with
+      # Seven images -- the six services and the simulator -- pushed straight to the registry with
       # no Docker daemon involved. Tests are skipped because the build job has already run them
       # against this exact commit; running them again would double the wall clock to learn nothing.
       #
@@ -371,7 +371,7 @@ jobs:
 
       # The dashboard is the one image Jib cannot build: no JVM, no main class, just static files
       # and an nginx. It has a Dockerfile, so it is an ordinary docker build -- and this job does
-      # have a daemon available, it simply does not need one for the other six.
+      # have a daemon available, it simply does not need one for the other seven.
       - name: Build and push the dashboard image
         run: |
           docker build \
@@ -390,7 +390,7 @@ jobs:
             echo "Tag: \`${{ github.sha }}\`"
             echo
             for image in ingest-gateway tracking-processor shipment-service \
-                         exception-service dashboard-api fleet-simulator dashboard; do
+                         exception-service dashboard-api archiver fleet-simulator dashboard; do
               echo "- \`ghcr.io/goutham-hegde/fleet-tracker/$image:${{ github.sha }}\`"
             done
           } >> "$GITHUB_STEP_SUMMARY"
@@ -445,7 +445,7 @@ jobs:
           git config user.email "goutham2606@gmail.com"
 
       # One substitution over one file, checked at both ends. See the script for why it refuses to
-      # run unless it finds exactly seven tags to rewrite.
+      # run unless it finds exactly eight tags to rewrite.
       - name: Point the GitOps overlay at this build
         run: ./scripts/set-image-tag.sh "${{ github.sha }}"
 
