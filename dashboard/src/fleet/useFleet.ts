@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchFleet, fetchMeta } from '../api/client';
 import { subscribeLive, type StreamState } from '../api/stream';
 import type { IncidentSummary, Meta, Movement } from '../api/types';
+import { ARCHIVE_MODE, ARCHIVE_POLL_MS } from '../mode';
 import { FleetStore, type ResolvedIncident } from './FleetStore';
 
 /** How often the snapshot is re-fetched. Slow, because the stream is what carries movement. */
@@ -72,7 +73,7 @@ export function useFleet(): { store: FleetStore; status: FleetStatus; refresh: (
   const store = useMemo(() => new FleetStore(), []);
 
   const [status, setStatus] = useState<FleetStatus>({
-    streamState: 'connecting',
+    streamState: ARCHIVE_MODE ? 'archive' : 'connecting',
     shipments: 0,
     byMovement: { ...EMPTY_MOVEMENT },
     openIncidents: 0,
@@ -88,7 +89,7 @@ export function useFleet(): { store: FleetStore; status: FleetStatus; refresh: (
 
   // Held in a ref so the recompute timer can read it without being re-created, and so a snapshot
   // fetch that lands after a stream state change does not overwrite it with a stale value.
-  const streamState = useRef<StreamState>('connecting');
+  const streamState = useRef<StreamState>(ARCHIVE_MODE ? 'archive' : 'connecting');
   const snapshotAt = useRef<number | null>(null);
   const error = useRef<string | null>(null);
   const meta = useRef<Meta | null>(null);
@@ -120,15 +121,23 @@ export function useFleet(): { store: FleetStore; status: FleetStatus; refresh: (
   useEffect(() => {
     refresh();
 
-    const close = subscribeLive({
-      onUpdate: (update) => store.apply(update),
-      onOpen: () => refresh(),
-      onState: (state) => {
-        streamState.current = state;
-      },
-    });
+    // The public build has no stream: the lookup function answers from an archive that changes
+    // hourly, and holding a connection open per viewer is exactly what a function billed per
+    // invocation cannot do. The snapshot and the poll are the whole mechanism there.
+    let close = () => {};
+    if (ARCHIVE_MODE) {
+      streamState.current = 'archive';
+    } else {
+      close = subscribeLive({
+        onUpdate: (update) => store.apply(update),
+        onOpen: () => refresh(),
+        onState: (state) => {
+          streamState.current = state;
+        },
+      });
+    }
 
-    const poll = window.setInterval(refresh, POLL_INTERVAL_MS);
+    const poll = window.setInterval(refresh, ARCHIVE_MODE ? ARCHIVE_POLL_MS : POLL_INTERVAL_MS);
 
     const tick = window.setInterval(() => {
       const byMovement = { ...EMPTY_MOVEMENT };

@@ -220,6 +220,11 @@ body,
   color: #f87171;
 }
 
+/* The public build: not a connection state at all, so not green, amber or red. */
+.stream-archive {
+  color: #93c5fd;
+}
+
 .pill-quiet {
   background: #eef1f6;
   color: var(--ink-soft);

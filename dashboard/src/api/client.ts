@@ -11,10 +11,20 @@
  * built assets are served, and a real hostname in M8. It is read from the environment at build
  * time rather than sniffed at runtime, so a misconfiguration fails visibly in one place.
  */
+import { ARCHIVE_MODE } from '../mode';
 import type { IncidentSummary, Meta, ShipmentDetail, ShipmentSummary } from './types';
 
-/** Where the dashboard API lives. Overridable with `VITE_API_BASE` in `.env.local`. */
-export const API_BASE: string = import.meta.env.VITE_API_BASE ?? 'http://localhost:18083';
+/**
+ * Where the dashboard API lives. Overridable with `VITE_API_BASE` in `.env.local`.
+ *
+ * The public build is always same-origin: CloudFront serves the page and routes `/api/*` to the
+ * lookup function, so the paths are relative and no CORS is involved. Stated in code rather than by
+ * setting the variable to an empty string, because whether an empty environment variable survives
+ * into a build is a question about the tool, and the answer should not decide where the page looks.
+ */
+export const API_BASE: string = ARCHIVE_MODE
+  ? ''
+  : (import.meta.env.VITE_API_BASE ?? 'http://localhost:18083');
 
 /**
  * A request that failed, carrying the status so a caller can tell the cases apart.

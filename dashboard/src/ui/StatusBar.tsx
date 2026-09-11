@@ -11,12 +11,14 @@
  * silence — and it is reported as silence rather than dressed as a fault.
  */
 import type { FleetStatus } from '../fleet/useFleet';
-import { ago } from './format';
+import { ARCHIVE_MODE } from '../mode';
+import { ago, dateTime } from './format';
 
 const STREAM_LABEL: Record<FleetStatus['streamState'], string> = {
   connecting: 'connecting',
   open: 'live',
   reconnecting: 'reconnecting',
+  archive: 'archive',
 };
 
 interface StatusBarProps {
@@ -33,7 +35,7 @@ export function StatusBar({ status, showDelivered, onToggleDelivered, onRefresh 
     <header className="statusbar">
       <div className="statusbar-title">
         <strong>Fleet tracking</strong>
-        <span className="statusbar-sub">live map</span>
+        <span className="statusbar-sub">{ARCHIVE_MODE ? 'public archive view' : 'live map'}</span>
       </div>
 
       <div className={`pill pill-stream stream-${status.streamState}`}>
@@ -69,14 +71,25 @@ export function StatusBar({ status, showDelivered, onToggleDelivered, onRefresh 
             {status.criticalIncidents > 0 ? ` (${status.criticalIncidents} critical)` : ''}
           </dd>
         </div>
-        <div>
-          <dt>last update</dt>
-          <dd>{status.quietForSeconds == null ? 'none yet' : `${ago(status.quietForSeconds)} ago`}</dd>
-        </div>
-        <div>
-          <dt>updates applied</dt>
-          <dd>{status.updatesApplied}</dd>
-        </div>
+        {ARCHIVE_MODE ? (
+          // The one number that says how old everything else on the page is. The archive advances
+          // only while the laptop runs, so this can be days behind, and that is the honest answer.
+          <div title="When the platform received the newest event that has reached this page">
+            <dt>archived through</dt>
+            <dd>{dateTime(status.meta?.archivedThrough)}</dd>
+          </div>
+        ) : (
+          <>
+            <div>
+              <dt>last update</dt>
+              <dd>{status.quietForSeconds == null ? 'none yet' : `${ago(status.quietForSeconds)} ago`}</dd>
+            </div>
+            <div>
+              <dt>updates applied</dt>
+              <dd>{status.updatesApplied}</dd>
+            </div>
+          </>
+        )}
       </dl>
 
       <div className="statusbar-right">
@@ -101,7 +114,16 @@ export function StatusBar({ status, showDelivered, onToggleDelivered, onRefresh 
           // simulator running, or a database with no positions in it. Not a fault, and not the
           // same thing as a failed fetch.
           <span className="statusbar-empty">
-            API reachable, no shipments reporting — start the simulator
+            {ARCHIVE_MODE
+              ? 'Nothing archived yet — the platform has not run since this page was set up'
+              : 'API reachable, no shipments reporting — start the simulator'}
+          </span>
+        ) : ARCHIVE_MODE ? (
+          <span
+            className="statusbar-empty"
+            title="The platform runs on a laptop with no public address. What it archives to S3 is indexed as each hour closes, and this page reads that index."
+          >
+            What the platform last archived. The live system runs on a laptop.
           </span>
         ) : null}
         <button type="button" className="button" onClick={onRefresh}>

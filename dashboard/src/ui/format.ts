@@ -54,7 +54,26 @@ export function ago(seconds: number | null | undefined): string {
   if (seconds < 3_600) {
     return `${Math.floor(seconds / 60)}m`;
   }
-  return `${Math.floor(seconds / 3_600)}h ${Math.floor((seconds % 3_600) / 60)}m`;
+  if (seconds < 86_400) {
+    return `${Math.floor(seconds / 3_600)}h ${Math.floor((seconds % 3_600) / 60)}m`;
+  }
+  // The public archive view routinely shows fixes from days ago; "50h 3m" makes a person divide.
+  return `${Math.floor(seconds / 86_400)}d ${Math.floor((seconds % 86_400) / 3_600)}h`;
+}
+
+/**
+ * `2026-09-11T12:59:00Z` becomes `11 Sep, 18:29`, in the viewer's own zone. For instants that may
+ * not be today, which on the live map is nothing and on the public archive view is most things.
+ */
+export function dateTime(instant?: string): string {
+  if (!instant) {
+    return '—';
+  }
+  const at = new Date(instant);
+  if (Number.isNaN(at.getTime())) {
+    return '—';
+  }
+  return at.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 /** A duration in seconds, as "35m" or "1h 10m". Used for dwell times. */

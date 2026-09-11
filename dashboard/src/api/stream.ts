@@ -36,7 +36,11 @@ const EVENT_NAMES: LiveUpdateType[] = [
  * distinction a viewer needs is between "the markers you are looking at are live" and "they are
  * as of some time ago", which is exactly these three values.
  */
-export type StreamState = 'connecting' | 'open' | 'reconnecting';
+/**
+ * Where the stream is. `archive` is not a stream state at all: it is the public build, which has no
+ * stream to be in any state of, and saying so is better than a pill reading "connecting" for ever.
+ */
+export type StreamState = 'connecting' | 'open' | 'reconnecting' | 'archive';
 
 export interface StreamHandlers {
   /** One update, already parsed and narrowed by `type`. */
