@@ -32,6 +32,16 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['maplibre-gl'],
   },
+
+  /*
+   * MapLibre's worker is bundled as an ES module, not the default IIFE. MapLibre starts it as a
+   * module worker (falling back to a classic one only if the browser refuses), and its code uses
+   * module syntax that an IIFE bundle cannot carry. See src/map/worker.ts for why the worker is
+   * bundled at all.
+   */
+  worker: {
+    format: 'es',
+  },
   server: {
     port: 5173,
     // Fail rather than silently moving to 5174, which would be an origin the API rejects.
