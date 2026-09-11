@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.fleettracking</groupId>
+    <artifactId>fleet-tracking-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>public-view</artifactId>
+  <name>public-view</name>
+  <description>Two AWS Lambda functions: index the archive into DynamoDB, and answer the public page from it</description>
+
+  <properties>
+    <aws-lambda-java-core.version>1.4.0</aws-lambda-java-core.version>
+    <maven-assembly-plugin.version>3.8.0</maven-assembly-plugin.version>
+  </properties>
+
+  <dependencies>
+    <!-- The canonical events and EventJson. An archived line's value is the exact string Kafka
+         held, so reading it with the platform's own records and mapper is what makes "the public
+         page shows what the platform concluded" true rather than approximately true. -->
+    <dependency>
+      <groupId>com.fleettracking</groupId>
+      <artifactId>events</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- The Lambda runtime's handler interfaces, and nothing else. Deliberately NOT
+         aws-lambda-java-events: that library brings its own serialization for the event
+         envelopes, a second JSON configuration next to EventJson. The two envelopes this module
+         reads (an S3 notification and a function URL request) are parsed as trees instead. -->
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-lambda-java-core</artifactId>
+      <version>${aws-lambda-java-core.version}</version>
+    </dependency>
+
+    <!-- No Spring here, and that is a decision rather than an omission: a Lambda pays for its
+         start-up on the request that woke it, and a Spring context is seconds of it. The SDK
+         clients are built by hand with the JDK's own HTTP stack, as in the archiver.
+
+         Three HTTP clients excluded, not two. SDK 2.54 added apache5-client as a default
+         dependency under a new artifact name, so an exclusion list naming apache-client alone
+         quietly stopped excluding anything : the archiver shipped 2.3 MB of Apache HttpClient 5
+         it never used until S22 listed the contents of this zip. Check the zip's lib/ after an SDK
+         upgrade; a new client arrives with no warning. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>netty-nio-client</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>apache-client</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>apache5-client</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>dynamodb</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>netty-nio-client</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>apache-client</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>software.amazon.awssdk</groupId>
+          <artifactId>apache5-client</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>url-connection-client</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- Testcontainers logs through SLF4J; without a binding it prints a warning and nothing else,
+         which hides the container start-up lines that explain a slow or failed IT. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <!-- The lane catalogue, taken from where it is committed rather than copied in. It is the one
+           home of every stop's name, position and geofence size (the simulator exports it and
+           seed-itinerary.sh loads it), so a lane change reaches the public page by rebuilding,
+           and a second copy that could drift does not exist. -->
+      <resource>
+        <directory>${project.basedir}/../../docs/samples</directory>
+        <includes>
+          <include>lanes.json</include>
+        </includes>
+        <targetPath>plan</targetPath>
+      </resource>
+    </resources>
+
+    <plugins>
+      <!-- The deployment package: this module's classes at the root of a zip and every dependency
+           jar under lib/, which is the layout the Java runtime documents for a .zip. Chosen over an
+           uber-jar because shading merges every dependency's META-INF, and both the SDK and
+           Jackson 3 find their parts through ServiceLoader files there : the merge is exactly
+           where an uber-jar breaks, and it breaks at runtime rather than at build. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>${maven-assembly-plugin.version}</version>
+        <configuration>
+          <descriptors>
+            <descriptor>src/assembly/lambda.xml</descriptor>
+          </descriptors>
+          <finalName>public-view</finalName>
+          <appendAssemblyId>false</appendAssemblyId>
+        </configuration>
+        <executions>
+          <execution>
+            <id>lambda-zip</id>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
