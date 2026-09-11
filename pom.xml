@@ -20,6 +20,7 @@
     <module>services/shipment-service</module>
     <module>services/exception-service</module>
     <module>services/dashboard-api</module>
+    <module>services/archiver</module>
     <module>tools/fleet-simulator</module>
   </modules>
 
@@ -29,6 +30,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <spring-boot.version>4.1.1</spring-boot.version>
+    <aws-sdk.version>2.54.16</aws-sdk.version>
 
     <!-- Container images. Jib builds them from the compiled classes without a Dockerfile and
          without a Docker daemon of its own : see the pluginManagement entry below for why that
@@ -67,6 +69,17 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-dependencies</artifactId>
         <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- The AWS SDK for Java v2, imported the same way. S21's archiver is the first module that
+           talks to AWS; the BOM keeps every SDK artifact it pulls in at one version, since the SDK
+           is published as a few hundred separately versioned jars that must agree. -->
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${aws-sdk.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>

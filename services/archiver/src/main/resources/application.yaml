@@ -1,0 +1,81 @@
+spring:
+  application:
+    name: archiver
+
+  kafka:
+    bootstrap-servers: localhost:19092
+
+    consumer:
+      # Its own group, like every consumer here: the archiver reads all four canonical topics from
+      # the beginning without affecting anybody else's progress. There is no @KafkaListener in this
+      # service, so the idIsGroup trap the other consumers guard against cannot arise; the consumer
+      # is built directly from this configuration.
+      group-id: archiver
+
+      # A new archiver backfills what Kafka still holds (24 hours) rather than starting from now.
+      auto-offset-reset: earliest
+
+      # Offsets are committed by hand, and only behind the oldest record not yet in S3. Auto-commit
+      # would commit what has been *read*, which here is up to an hour ahead of what has been kept.
+      enable-auto-commit: false
+
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Strings, never parsed on the way in: the archive keeps exactly what Kafka held.
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+      max-poll-records: 1000
+
+    # Used only by a replay that republishes.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+
+fleet:
+  archiver:
+    mode: archive
+
+    # Deliberately unset. In the cluster it comes from the archive-destination ConfigMap that
+    # scripts/aws-link.sh writes from Terraform's outputs, as FLEET_ARCHIVER_BUCKET; the service
+    # refuses to start without it.
+    # bucket:
+
+    prefix: archive
+    region: ap-south-1
+
+    # One file per topic per UTC hour, closed a minute after the hour ends and goes quiet. See
+    # Batcher for why the request count, not the byte count, is what this is tuned against.
+    quiet-period: 1m
+    max-object-size: 32MB
+    max-buffered-size: 96MB
+    poll-timeout: 1s
+    retry-backoff: 30s
+
+server:
+  # 18086, for the kubelet's probes only. Not mapped to a host port.
+  port: 18086
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        # Nothing but the application's own state, in both. The archiver's only dependencies are
+        # Kafka, whose outages the consumer rides out by itself, and S3, whose refusals pause
+        # consumption rather than stopping it (see ArchiveLoop). Taking the pod out of service for
+        # either would change nothing: nothing sends it traffic. What matters is liveness, which the
+        # loop marks BROKEN if it dies.
+        readiness:
+          include: readinessState
+
+logging:
+  level:
+    com.fleettracking: INFO
