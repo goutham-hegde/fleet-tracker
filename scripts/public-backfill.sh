@@ -48,7 +48,7 @@ unreadable=0
 index_batch() {
   local payload
   payload="$(python -c 'import json,sys; print(json.dumps({"bucket": sys.argv[1], "keys": sys.argv[2:]}))' \
-    "$ARCHIVE_BUCKET" "$@")"
+    "$ARCHIVE_BUCKET" "$@" | tr -d '\r')"
   # Synchronous, so the counts come back. The CLI's own read timeout is 60s by default, less than
   # the function's 120s, and a batch of position hours can take longer than a minute cold.
   aws lambda invoke --function-name "$FUNCTION" --cli-binary-format raw-in-base64-out \
@@ -65,11 +65,12 @@ index_batch() {
     else
       warn "$key: $w written, $o already newer, $u unreadable"
     fi
+  # tr: Python on Windows ends each line with \r\n, and bash's arithmetic refuses "0\r" as a number.
   done < <(python -c '
 import json, sys
 for f in json.load(open(sys.argv[1]))["files"]:
     print("\t".join([f["key"], str(f["written"]), str(f["older"]), str(f["unreadable"])]))
-' "$response")
+' "$response" | tr -d '\r')
 }
 
 for topic in "${TOPICS[@]}"; do
