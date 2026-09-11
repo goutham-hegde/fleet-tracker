@@ -17,6 +17,7 @@ import { useNow } from '../fleet/useLiveShipment';
 import type { ShipmentDetail } from '../api/types';
 import { ago, celsius, clock, duration, humanize, km, kph, pendingReason, percent, until } from './format';
 import { ManifestPanel } from './ManifestPanel';
+import { ARCHIVE_MODE } from '../mode';
 
 interface ShipmentCardProps {
   shipment: FleetShipment | undefined;
@@ -164,7 +165,16 @@ export function ShipmentCard({ shipment, detail, detailError, onClose }: Shipmen
         )}
       </div>
 
-      <ManifestPanel manifest={detail?.manifest} loaded={detail != null || detailError != null} />
+      {ARCHIVE_MODE ? (
+        // Not "no manifest filed": every load has one. Manifests are a customer's paperwork, held by
+        // the shipment service on the laptop, and they are not part of what reaches the archive.
+        <div className="card-block">
+          <h3>Manifest</h3>
+          <p className="card-line card-muted">not part of the public archive view</p>
+        </div>
+      ) : (
+        <ManifestPanel manifest={detail?.manifest} loaded={detail != null || detailError != null} />
+      )}
     </section>
   );
 }

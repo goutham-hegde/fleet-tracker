@@ -170,6 +170,10 @@ export interface ShipmentDetail {
 export interface Meta {
   trackedShipments: number;
   openExceptions: number;
+  /** `archive` from the public view's lookup function; absent from the live API. */
+  source?: 'archive';
+  /** How recent the archive is: when the platform received the newest line indexed. Archive only. */
+  archivedThrough?: string;
 }
 
 // ---------------------------------------------------------------------------
