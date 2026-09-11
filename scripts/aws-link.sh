@@ -7,7 +7,7 @@
 #      seen is refused with "InvalidIdentityToken", which names neither the key nor this script.
 #   2. Write the archive-destination ConfigMap: which bucket, which region, which roles. These come
 #      from Terraform's outputs, so nothing in the repository names the account.
-#   3. Restart the archiver, if it exists, so it picks both up.
+#   3. Restart the archiver, but only if it was running with a destination that has now changed.
 #
 # Usage: ./scripts/aws-link.sh
 #
@@ -57,7 +57,10 @@ kubectl cluster-info >/dev/null 2>&1 || die "The cluster is not reachable. Run .
 # The API server publishes its own discovery document. Its `issuer` is the flag in
 # deploy/kind-cluster.yaml, and it must match Terraform's byte for byte: AWS compares the `iss` in
 # every token against the provider it was told to trust, and a mismatch is a flat refusal.
-cluster_issuer="$(kubectl get --raw /.well-known/openid-configuration \
+#
+# MSYS_NO_PATHCONV=1 on both --raw reads is required: Git Bash rewrites a leading-slash argument into
+# a Windows path, the API server answers 404 for it, and this check would then blame the cluster.
+cluster_issuer="$(MSYS_NO_PATHCONV=1 kubectl get --raw /.well-known/openid-configuration \
   | sed -n 's/.*"issuer":"\([^"]*\)".*/\1/p')"
 if [ "$cluster_issuer" != "$issuer" ]; then
   die "The cluster's issuer is '$cluster_issuer', but AWS trusts '$issuer'.
@@ -70,7 +73,7 @@ ok "the cluster issues tokens as $cluster_issuer"
 log "Publishing the cluster's public key"
 jwks="$(mktemp)"
 trap 'rm -f "$jwks"' EXIT
-kubectl get --raw /openid/v1/jwks > "$jwks"
+MSYS_NO_PATHCONV=1 kubectl get --raw /openid/v1/jwks > "$jwks"
 grep -q '"kid"' "$jwks" || die "The cluster returned no signing keys. Is it healthy?"
 # Windows-style temp path for the Windows aws.exe.
 aws s3 cp "$(cygpath -w "$jwks" 2>/dev/null || echo "$jwks")" "s3://$issuer_bucket/openid/v1/jwks" \
@@ -84,6 +87,8 @@ ok "published key $kid, readable anonymously"
 # ------------------------------------------------------------------------------------------------
 log "Writing the archive-destination ConfigMap"
 kubectl get namespace fleet >/dev/null 2>&1 || die "No fleet namespace. Run ./scripts/platform-up.sh"
+destination() { kubectl get configmap/archive-destination -n fleet -o jsonpath='{.data}' 2>/dev/null || true; }
+before="$(destination)"
 kubectl create configmap archive-destination -n fleet \
   --from-literal=bucket="$archive_bucket" \
   --from-literal=region="$region" \
@@ -92,7 +97,16 @@ kubectl create configmap archive-destination -n fleet \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 ok "fleet/archive-destination"
 
-if kubectl get deployment/archiver -n fleet >/dev/null 2>&1; then
+# Restart only when a running archiver holds a destination that has just changed: environment
+# variables are read once, at container start. On a first link the archiver is still waiting in
+# CreateContainerConfigError and starts by itself once the ConfigMap exists, so a restart would only
+# add a second pod, a consumer-group rebalance, and one extra S3 write per topic as each pod flushes
+# what it holds. A new public key needs no restart at all: STS fetches it on the next exchange.
+if [ -z "$before" ]; then
+  ok "first link: a waiting archiver starts by itself"
+elif [ "$before" != "$(destination)" ] && kubectl get deployment/archiver -n fleet >/dev/null 2>&1; then
   kubectl rollout restart deployment/archiver -n fleet >/dev/null
-  ok "archiver restarted to pick it up"
+  ok "destination changed: archiver restarted to pick it up"
+else
+  ok "destination unchanged: archiver left running"
 fi
