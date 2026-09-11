@@ -41,7 +41,7 @@ log "Destroying the bootstrap stack: state bucket, then budget"
 tf bootstrap destroy -input=false "${APPROVE[@]}"
 
 if command -v gh >/dev/null 2>&1; then
-  for v in AWS_ROLE_ARN AWS_TRUSTED_SUBJECT; do
+  for v in AWS_ROLE_ARN AWS_TRUSTED_SUBJECT PUBLIC_SITE_BUCKET PUBLIC_DISTRIBUTION_ID; do
     gh variable delete "$v" >/dev/null 2>&1 && ok "$v repository variable removed" || true
   done
 fi

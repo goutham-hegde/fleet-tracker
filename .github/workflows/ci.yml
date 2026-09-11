@@ -227,7 +227,8 @@ jobs:
           mask-aws-account-id: true
 
       # get-caller-identity needs no IAM permission at all, which is why it is the check: it can
-      # only fail if the assumption itself failed. The role has no permissions attached as of S20.
+      # only fail if the assumption itself failed, whatever the role has since been granted. (S20
+      # attached nothing; S22 added the publish-public job's grants, in infra/cloud/public-view.tf.)
       - name: Who am I now
         run: |
           arn="$(aws sts get-caller-identity --query Arn --output text)"
@@ -393,6 +394,81 @@ jobs:
                          exception-service dashboard-api archiver fleet-simulator dashboard; do
               echo "- \`ghcr.io/goutham-hegde/fleet-tracker/$image:${{ github.sha }}\`"
             done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------------------------
+  # The public view. The first job here that changes anything in AWS.
+  # ---------------------------------------------------------------------------------------------
+  #
+  # Replaces the two Lambda functions' code and uploads the dashboard built in archive mode, then
+  # tells CloudFront that index.html has changed. Everything it touches was created by Terraform;
+  # this job owns only the code, which is why the functions' Terraform ignores their zip after
+  # creating them. The steps are scripts/public-publish.sh, so a person filling a fresh public view
+  # runs exactly what this runs.
+  #
+  # Behind the same three test jobs as the image publish, for the same reason: `needs` is the gate,
+  # so a red test means nothing reaches the public address. And skipped, not failed, when the
+  # account has no public view -- as with the AWS jobs above, tearing AWS down must not turn the
+  # pipeline red.
+  publish-public:
+    name: Publish the public view to AWS
+    needs: [build, dashboard, manifests]
+    if: >
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && vars.AWS_ROLE_ARN != '' && vars.PUBLIC_SITE_BUCKET != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Two runs publishing at once would interleave uploads and could leave index.html from one build
+    # naming assets deleted by the other. One at a time, never cancelled half way.
+    concurrency:
+      group: publish-public
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      # The same pinned action as aws-identity. What this role may do is exactly the
+      # "github_actions_public" policy in infra/cloud/public-view.tf: write one bucket, invalidate one
+      # distribution, replace two functions' code. Nothing else in the account.
+      - name: Exchange GitHub's token for AWS credentials
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: gha-public-${{ github.run_id }}
+          aws-region: ap-south-1
+          mask-aws-account-id: true
+
+      - name: Publish
+        env:
+          PUBLIC_SITE_BUCKET: ${{ vars.PUBLIC_SITE_BUCKET }}
+          PUBLIC_DISTRIBUTION_ID: ${{ vars.PUBLIC_DISTRIBUTION_ID }}
+        run: ./scripts/public-publish.sh
+
+      - name: Summarise what was published
+        run: |
+          {
+            echo "### Public view published"
+            echo
+            echo "Functions and dashboard from \`${{ github.sha }}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------------------------
