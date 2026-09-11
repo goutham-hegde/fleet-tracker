@@ -21,6 +21,7 @@
     <module>services/exception-service</module>
     <module>services/dashboard-api</module>
     <module>services/archiver</module>
+    <module>functions/public-view</module>
     <module>tools/fleet-simulator</module>
   </modules>
 
