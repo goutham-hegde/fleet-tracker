@@ -29,3 +29,25 @@ output "cluster_issuer" {
 output "cluster_issuer_bucket" {
   value = aws_s3_bucket.cluster_issuer.bucket
 }
+
+# The public view (S22). The first is the address to open; the next two become repository variables
+# the publish-public job reads, set by scripts/infra-up.sh like AWS_ROLE_ARN.
+output "public_url" {
+  value = "https://${aws_cloudfront_distribution.public.domain_name}"
+}
+
+output "public_site_bucket" {
+  value = aws_s3_bucket.public_site.bucket
+}
+
+output "public_distribution_id" {
+  value = aws_cloudfront_distribution.public.id
+}
+
+output "public_table" {
+  value = aws_dynamodb_table.public.name
+}
+
+output "public_index_function" {
+  value = aws_lambda_function.public["index"].function_name
+}

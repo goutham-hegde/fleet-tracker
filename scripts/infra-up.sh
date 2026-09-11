@@ -73,6 +73,18 @@ fi
 ok "state bucket: $bucket"
 
 # ------------------------------------------------------------------------------------------------
+# The public view's two functions are created from a zip Maven builds. Terraform reads it only when a
+# function is first created -- after that CI owns the code -- but on that first apply it must exist,
+# and a missing file fails the apply halfway through with the table and buckets already made.
+ZIP="$REPO_ROOT/functions/public-view/target/public-view.zip"
+if [ "$MODE" != plan ] && [ ! -f "$ZIP" ]; then
+  log "Building the public view's Lambda package (first apply needs it)"
+  (cd "$REPO_ROOT" && ./mvnw -B -ntp -q -pl functions/public-view -am -DskipTests package) \
+    || die "Could not build $ZIP"
+  ok "$ZIP"
+fi
+
+# ------------------------------------------------------------------------------------------------
 log "Cloud stack (state in s3://$bucket)"
 # -reconfigure because the bucket name is only known now; it is not stored in any committed file.
 tf cloud init -input=false -reconfigure -backend-config="bucket=$bucket" >/dev/null
@@ -84,21 +96,35 @@ tf cloud apply -input=false "${APPROVE[@]}"
 
 role_arn="$(tf cloud output -raw github_actions_role_arn)"
 subject="$(tf cloud output -raw github_actions_trusted_subject)"
+site_bucket="$(tf cloud output -raw public_site_bucket)"
+distribution="$(tf cloud output -raw public_distribution_id)"
+public_url="$(tf cloud output -raw public_url)"
 ok "CI role: $role_arn"
 ok "trusted: $subject"
+ok "public view: $public_url"
 
 # ------------------------------------------------------------------------------------------------
-# Two repository variables. The ARN is what CI asks for. The subject is what the pull-request check
+# Repository variables. The ARN is what CI asks for. The subject is what the pull-request check
 # compares its own token against, so that a refusal it counts as a pass is a refusal for being a
-# pull request, and not for carrying a subject the policy would never have matched anyway.
+# pull request, and not for carrying a subject the policy would never have matched anyway. The site
+# bucket and distribution are where the publish-public job puts the dashboard; the bucket's name
+# carries the account id, which is why it is not written into the workflow.
 if command -v gh >/dev/null 2>&1; then
-  log "Storing AWS_ROLE_ARN and AWS_TRUSTED_SUBJECT as repository variables"
+  log "Storing repository variables: AWS_ROLE_ARN, AWS_TRUSTED_SUBJECT, PUBLIC_SITE_BUCKET, PUBLIC_DISTRIBUTION_ID"
   gh variable set AWS_ROLE_ARN --body "$role_arn" >/dev/null
   gh variable set AWS_TRUSTED_SUBJECT --body "$subject" >/dev/null
+  gh variable set PUBLIC_SITE_BUCKET --body "$site_bucket" >/dev/null
+  gh variable set PUBLIC_DISTRIBUTION_ID --body "$distribution" >/dev/null
   ok "done"
 else
-  warn "gh not found. Set AWS_ROLE_ARN and AWS_TRUSTED_SUBJECT by hand under Settings > Secrets and variables > Actions > Variables"
+  warn "gh not found. Set AWS_ROLE_ARN, AWS_TRUSTED_SUBJECT, PUBLIC_SITE_BUCKET and PUBLIC_DISTRIBUTION_ID by hand under Settings > Secrets and variables > Actions > Variables"
 fi
+
+# A new site bucket is empty until the first merge's publish-public job fills it, and a new table is
+# empty until the archiver next finishes an hour. Neither needs to wait: publish the current build
+# and index what is already archived.
+echo
+ok "To fill a new public view now: ./scripts/public-publish.sh && ./scripts/public-backfill.sh"
 
 # The cloud stack describes who the cluster's pods may become; the running cluster still has to
 # publish its public key and be told where the archive is. That half changes every time Kind is
