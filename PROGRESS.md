@@ -3,7 +3,7 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-10 · **Current position:** M8 in progress, session S20 of 24
+**Last updated:** 2026-09-11 · **Current position:** M8 in progress, session S21 of 24
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -15,9 +15,9 @@ M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
 M7 ██████████  2/2              complete
-M8 ███░░░░░░░  1/3              ← in progress
+M8 ███████░░░  2/3              ← in progress
 M9 ░░░░░░░░░░  0/2
-               20/24 sessions
+               21/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -204,14 +204,15 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 **Capability:** a public HTTPS URL, real IAM, archived events in S3 — at **$0**.
 
 - [x] **S20** — AWS account, budget alert, Terraform base, GitHub OIDC
-- [ ] **S21** — Archiver writing partitioned events to S3
+- [x] **S21** — Archiver writing partitioned events to S3
 - [ ] **S22** — CloudFront + Lambda public demo
 
 **Exit criteria**
 
 - [x] A GitHub Actions job assumes the AWS role with **zero stored credentials** — run
   `34471965342` on `dd7f802`, and on every merge to `main` since
-- [ ] S3 objects land under correct date/hour partitions and replay reads them back
+- [x] S3 objects land under correct date/hour partitions and replay reads them back — hour
+  `2026-09-11T12` of all four topics, verified by replay Jobs under their own read-only role
 - [ ] A public HTTPS URL serves the dashboard; Lambda lookup returns real data
 - [ ] `terraform destroy` removes everything cleanly
 - [ ] **AWS billing console reads $0.00**
@@ -2239,31 +2240,117 @@ scripts set their region themselves and were unaffected, which is why this surfa
 
 ---
 
+## S21 — An archive, and pods that sign in as themselves · 2026-09-11 · M8
+
+`services/archiver` has been an empty directory since M0. It is now a Kafka consumer that copies the
+four canonical topics into S3 as gzipped NDJSON, one file per topic per UTC hour, under
+`archive/<topic>/dt=YYYY-MM-DD/hour=HH/`; and the same image run as a Job reads an hour range back,
+checks every record, and can republish it. The archiver is the platform's first write to AWS from
+somewhere other than CI, so it also needed a way in that is not a stored key: the Kind cluster is now
+an OIDC issuer that AWS trusts, recorded in [ADR 0002](docs/adr/0002-the-cluster-as-its-own-identity-provider.md).
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| How a pod on the laptop reaches AWS | **The cluster is its own OIDC identity provider.** The API server signs service-account tokens as a public S3 address, IAM trusts that address, and STS exchanges a pod's token for hour-long credentials. It is the mechanism EKS calls "IAM roles for service accounts", built by hand | An IAM user with a key scoped to one prefix: simplest, and precisely the credential M8 set out not to have. IAM Roles Anywhere: legitimate, but a private key on disk is a long-lived credential in certificate form, and needs AWS's signing helper in the image |
+| Who may assume the two roles | **Exactly one service account each**: `fleet:archiver` may `PutObject` under `archive/`; `fleet:archive-replay` may `GetObject` there and list that prefix. Neither may delete | One role for both. The writer has no reason to read, and the reader, which can republish onto canonical topics, has no reason to write |
+| How often a file is written | **One per topic per UTC hour**, closed once the hour has ended on the wall clock *and* the file has been quiet for a minute. A 32 MB file cap and a 96 MB buffer cap are safety valves | A file per event or per poll. The budget alarm fires at one cent of gross cost, which on this account is about 2,000 S3 writes a month; a file per poll would spend that catching up on a single backlog |
+| Which hour a record belongs to | **Ingestion time** (the Kafka record timestamp), in UTC. Each line still carries the event's own `occurredAt` | Event time. At `time-scale=150` one real hour spans ~150 simulated hours, so event-time partitions would mean ~450 files per real hour |
+| The consumer | **A hand-written poll loop** that commits only behind the oldest record not yet in S3 | `@KafkaListener`, whose model is "a record is done when the method returns". Here a record is done when its file reaches S3, up to an hour and thousands of polls later |
+| A refused S3 write | **Pause the consumer** and keep polling, so it stays in the group fetching nothing, until a write succeeds | Retrying inside the loop, which stops polling and gets the consumer evicted; or carrying on polling, which fills the heap |
+| File names | **End in the write instant, so never reused** | A name derived from content. A redelivered batch would then *overwrite* the file it duplicates, and the two need not hold the same records |
+| Duplicates | **Tolerated in the archive, removed by replay by event id** | Removing them by partition and offset, which restart at zero in a recreated cluster |
+| Replay | **Verify by default; republishing is an explicit fourth argument**, and republished records carry a `fleet.replayed-from` header the archiver passes over | Republishing by default. That would make replay a second writer onto canonical topics after the gateway, which should never happen by accident |
+| Retention | **Positions three days, everything else thirty**, by lifecycle rule | Keeping everything. Positions are 83% of the bytes and are worth keeping only long enough to rebuild a cluster from |
+| S3 in tests | **`adobe/s3mock`** | MinIO, which stopped publishing images in 2025, and LocalStack, which now needs an account token |
+
+### What surprised me
+
+**Another project on this machine had the Kafka host port.** Recreating Kind for the issuer flag
+failed with `port is already allocated` on 19092, held by an unrelated project's broker. A *stopped*
+Kind cluster binds nothing, so the clash only appears when a cluster is created or started. The
+cluster was recreated once that broker was stopped.
+
+**The AWS half had never been applied, and the script said so.** `aws-link.sh` stopped at once with
+"Terraform output 'cluster_issuer' is empty. Apply the cloud stack". That is S20's lesson about
+`terraform output` exiting 0 on nothing paying off: without the emptiness check it would have gone on
+to write a ConfigMap naming a bucket called nothing. The plan was 14 additions and no other change.
+
+**Git Bash rewrote an API path, and the script would have blamed the cluster.** With the cluster up
+and the issuer flag visibly in the API server's manifest, `kubectl get --raw
+/.well-known/openid-configuration` answered 404. Git Bash converts any argument beginning with `/`
+into a Windows path before `kubectl` sees it. `aws-link.sh` makes exactly that call and would have
+stopped with "the cluster predates S21's issuer flag", which is plausible and wrong. Both `--raw`
+reads now set `MSYS_NO_PATHCONV=1`, the same fix `platform-up.sh` already had for `kubectl exec`.
+
+**The first files came from a rebalance, not from the hour closing.** They landed at 12:58, two per
+topic, four seconds apart. `aws-link.sh` restarted the archiver unconditionally, while the first pod
+(waiting for the ConfigMap the same script had just written) was starting by itself. For a few
+seconds two pods shared the group, and an archiver writes everything it holds when partitions are
+taken away, so each flushed its half. Nothing was wrong, since that flush is what stops a handover
+losing records, but it cost four writes for nothing. The script now restarts only when a running
+archiver's destination has actually changed.
+
+**The archive's duplicates are the source's, not the archiver's.** Replaying the position topic's
+hour found 32,874 lines and 32,804 distinct event ids. Seventy duplicates could have meant the
+archiver wrote a record twice across that rebalance. It did not: all 32,874 lines carry distinct
+partition/offset pairs, so every Kafka record appears exactly once, and every duplicated event id is
+a mobile-app fix sitting at two nearby offsets, one of the app's backlog resends that Kafka really
+received twice. Replay's dedup by event id is what absorbs them.
+
+**The SDK's web-identity provider is silently absent without the `sts` module.** AWS SDK v2 builds
+the default credential chain from whatever is on the classpath; without `sts`, the one provider this
+design depends on is simply not in it, and nothing says so until a request fails for want of credentials.
+Also: kubeadm's v1beta4 configuration (Kubernetes 1.31+) takes `extraArgs` as a list of name/value
+pairs, not a map.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| Kind recreated with the issuer flag | The API server's discovery document names `https://fleet-tracker-oidc.s3.ap-south-1.amazonaws.com`, matching Terraform's `cluster_issuer` exactly |
+| Cloud stack apply | 14 added, 0 changed, 0 destroyed; bootstrap unchanged |
+| The cluster's public key | Published by `aws-link.sh`, then read back anonymously over HTTPS and compared byte for byte |
+| **A pod proves who it is, with nothing stored** | Archiver log: `AWS identity: arn:aws:sts::…:assumed-role/fleet-tracker-archiver/archiver` |
+| One archiver owns every partition | 24 partitions across four topics, after the rollout |
+| **Files land in the right partitions** | Hour 12 of all four topics under `archive/<topic>/dt=2026-09-11/hour=12/`; the last of each written at 13:00:38–13:01:00, as the hour ended and went quiet. Positions compressed 21,355 KB to 1,816 KB |
+| **Replay reads them back**, as a Job under `fleet-tracker-archive-replay` | Positions: 3 files, 32,874 lines, 70 duplicates, 0 misplaced, 0 without an event id. Status: 771 lines, 1 duplicate. Derived: 8,248, none. Exceptions: 39, none. All four `Replay verified` |
+| Nothing archived twice | Every line in the position hour carries a distinct Kafka partition/offset; the 70 duplicate event ids are all mobile-app resends |
+| Role boundaries, by IAM's policy simulator | Archiver: `PutObject` allowed, `GetObject` and `DeleteObject` denied. Replay: `GetObject` allowed, `PutObject` and `DeleteObject` denied. Both denied writing outside `archive/` |
+| `aws-link.sh` re-run | Key republished; "destination unchanged: archiver left running", same pod |
+| `./mvnw -pl services/archiver -am verify` | 19 unit tests and `ArchiverIT` (Kafka and S3 in containers) pass |
+
+---
+
 ## Next up
 
-**S21 — the archiver.** `services/archiver` has been an empty directory since M0. It becomes a
-Kafka consumer that writes the event streams into S3 under date and hour partitions, and a replay
-that reads them back. M8's second exit criterion.
+**S22 — a public URL.** M8's last three exit criteria: a public HTTPS address serving the dashboard,
+a Lambda lookup returning real data, and a `terraform destroy` that removes everything, all with the
+bill at $0.00.
 
-Two things S21 has to settle before writing any code.
+The live map cannot be what is public, because its API runs on a laptop with no public address, which
+is exactly why deployment is pulled. So the public page has to be fed by something AWS holds, and
+the archive is the only real data there. The design question S22 has to settle first is what a
+stranger sees: a static build of the dashboard served from CloudFront, with a Lambda answering from
+the archive. Three constraints fall out of S21:
 
-**Which identity the laptop's archiver uses to write to S3.** This is the first write to AWS from
-somewhere that is not CI, so GitHub's OIDC token is not available, and the whole point of S20 was
-that the answer is not an access key. The candidates are IAM Roles Anywhere (a certificate the
-cluster holds, exchanged for temporary credentials against a trust anchor this project uploads,
-which is free as long as the certificate authority is not AWS's managed one) and an IAM user whose
-key can do exactly one thing to one prefix. The second is simpler and is precisely the credential
-this milestone set out not to have.
+- **Positions expire after three days.** A public page reading them shows nothing once the cluster
+  has been stopped for a long weekend. The exception and derived topics keep thirty days, and a
+  shipment's arrivals, departures and incidents may be the better thing to show anyway.
+- **Every read is a request on the same one-cent budget.** A Lambda that reads S3 per page view is
+  a GET per visitor; the answer has to be cached, at CloudFront or in the function.
+- **The CI role still has no permissions.** Publishing the static build is the first job that needs
+  one, and it should arrive scoped to that one bucket, with the reason beside it.
 
-**The write pattern is a cost decision.** S3's free allowance, where it applies, is counted in
-requests as well as bytes: about 2,000 PUTs a month. One object per event would spend that in
-minutes. One object per topic per hour is roughly 2,200 a month for three topics, which is already
-over. So batching, and the partition granularity, fall out of the bill before they fall out of any
-query pattern.
+The OpenStreetMap tile policy stops being theoretical at a public address; the keyed vector style
+behind `VITE_BASEMAP_STYLE` is needed.
 
-Carried from S20: the CI role has no permissions, and S21/S22 attach the first. The Free-plan
-account must be upgraded or wound down (`infra-down.sh` first) before **2027-03-10**.
+**The write budget, stated honestly.** One file per topic per hour is 2,880 writes a month if the
+cluster runs continuously, which is over the ~2,000 the one-cent alarm allows. It runs during
+sessions, so real usage is a few hundred. If it is ever left running for weeks, the alarm is what
+says so, which is the alarm doing its job.
 
-Also carried into M8: the dashboard's basemap still uses OpenStreetMap's own tile servers, whose
-usage policy reserves them for light traffic. A public URL is exactly the traffic that policy is
-about, so the keyed vector style behind that environment variable stops being optional.
+Carried from S20: the Free-plan account must be upgraded or wound down (`infra-down.sh` first)
+before **2027-03-10**. Kind generates a new signing key per cluster, so **`aws-link.sh` must run
+after every cluster creation**, or every pod token is refused with `InvalidIdentityToken`.

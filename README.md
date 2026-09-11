@@ -604,7 +604,7 @@ service module declares the plugin and states nothing. The dashboard is the exce
 files and an nginx, with no main class to point Jib at — so it has a two-stage Dockerfile.
 
 ```bash
-./scripts/images.sh    # build all seven, then load them into the Kind node
+./scripts/images.sh    # build all eight, then load them into the Kind node
 ```
 
 `kind load` is the part that is easy to forget. Kind runs Kubernetes inside a container with its own
@@ -706,7 +706,7 @@ place where the two copies can disagree.
 ghcr.io/goutham-hegde/fleet-tracker/<name>:<commit sha>
 ```
 
-Seven images, tagged with the full commit SHA and never `latest`. A moving tag cannot be rolled back
+Eight images, tagged with the full commit SHA and never `latest`. A moving tag cannot be rolled back
 to and cannot answer "what is actually running", because two machines can hold different images
 under the same name; a SHA names exactly one commit, so a running pod's image reference is a link
 into the history of this repository.
@@ -757,7 +757,7 @@ is made from the laptop. The laptop can be asleep for a day and will catch up wh
 ```
 merge to main
    ↓
-CI: tests → publish seven images to ghcr.io, tagged with the commit SHA
+CI: tests → publish eight images to ghcr.io, tagged with the commit SHA
    ↓
 CI: reset the `deploy` branch to that commit, stamp the tags into
     deploy/overlays/gitops, force-push
@@ -846,7 +846,7 @@ object ArgoCD manages. Both cases here are in `deploy/argocd/application.yaml`:
 ## AWS
 
 The platform runs on the laptop. AWS holds only what can exist there at **$0.00** under the
-always-free allowances: IAM, a budget, a few kilobytes of S3, and (from S22) Lambda behind
+always-free allowances: IAM, a budget, a few megabytes of S3, and (from S22) Lambda behind
 CloudFront. Nothing that could run Kafka or MongoDB is free, so there is no cloud cluster and no
 cloud overlay. The reasoning and the prices are in
 [ADR 0001](docs/adr/0001-aws-at-zero-dollars.md).
@@ -856,7 +856,7 @@ Two Terraform stacks under `infra/`:
 | Stack | Holds | State |
 |---|---|---|
 | `infra/bootstrap` | A zero-spend budget, then the state bucket, which depends on it | A local file (gitignored). A stack cannot keep its state in a bucket it is about to create |
-| `infra/cloud` | Everything else. As of S20, the GitHub OIDC provider and the CI role | `s3://fleet-tracker-tfstate-<account>/cloud/`, locked with a lock file in the bucket |
+| `infra/cloud` | Everything else: the GitHub OIDC provider and the CI role (S20); the cluster's OIDC provider, the archive bucket and two pod roles (S21) | `s3://fleet-tracker-tfstate-<account>/cloud/`, locked with a lock file in the bucket |
 
 **The budget counts gross cost.** On AWS's credit-based plans, usage is paid from credits first, so
 the bill reads $0.00 while real resources are being consumed. The budget excludes credits and emails
@@ -887,6 +887,15 @@ what their jobs need.
 **The laptop** signs in with `aws login`, which issues short-lived credentials from a console
 session. No access key is written anywhere.
 
+**Pods in the Kind cluster** use the same exchange GitHub does, with the cluster as the identity
+provider ([ADR 0002](docs/adr/0002-the-cluster-as-its-own-identity-provider.md)). The API server
+signs service-account tokens as `https://fleet-tracker-oidc.s3.ap-south-1.amazonaws.com`, a bucket
+whose only public objects are the discovery document and the cluster's public key. IAM trusts that
+issuer, and two roles each trust exactly one service account: `fleet:archiver` may write under
+`archive/`, and `fleet:archive-replay` may read there. Neither may delete. Kind generates a new
+signing key for every cluster, so **run `./scripts/aws-link.sh` after creating one**. Until then STS
+refuses every pod token with `InvalidIdentityToken`.
+
 ### Bringing it up
 
 One-time manual setup: create the account, put MFA on the root user, allow IAM users to see billing,
@@ -906,6 +915,32 @@ cp infra/bootstrap/terraform.tfvars.example infra/bootstrap/terraform.tfvars   #
 stacks report no changes. `infra-down.sh` destroys the cloud stack first, because its state lives in
 the bucket that the bootstrap stack owns, and removes the budget last. The alarm is the last thing
 to go for the same reason it was the first to exist.
+
+### The archive
+
+`services/archiver` copies the four canonical topics into S3 as gzipped NDJSON, one file per topic
+per UTC hour of *ingestion* time:
+
+```
+archive/<topic>/dt=YYYY-MM-DD/hour=HH/p<partition>-o<offset>-<writtenAtMillis>.ndjson.gz
+```
+
+A file is closed once its hour has ended and it has been quiet for a minute, which keeps the number
+of S3 writes (the thing that costs money) to about four an hour. Offsets are committed only behind
+the oldest record not yet in S3, so a crash repeats records and never loses one. Positions expire
+after three days and the other topics after thirty.
+
+```bash
+./scripts/aws-link.sh     # after every cluster creation: publish the key, write fleet/archive-destination
+kubectl logs -n fleet deployment/archiver | grep -E "AWS identity|Archived|PAUSED"
+./scripts/archive-replay.sh position.events.v1 2026-09-11T12:00:00Z                 # verify one hour
+./scripts/archive-replay.sh exceptions.v1 <from> <to> exceptions.v1                 # republish a range
+```
+
+Replay runs as a Job under the read-only role. By default it only verifies: every line parses, sits
+under the hour it claims and has an event id, and duplicates are counted by event id. Republishing
+onto a topic has to be asked for, and republished records carry a `fleet.replayed-from` header that
+the archiver skips, so a replay never doubles the archive.
 
 ## The demo path, without containers
 
