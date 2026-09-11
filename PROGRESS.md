@@ -3,7 +3,8 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-11 · **Current position:** M8 in progress, session S21 of 24
+**Last updated:** 2026-09-11 · **Current position:** M8 in progress, session S22 of 24 built;
+its public address awaits AWS account verification for CloudFront
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -15,7 +16,7 @@ M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
 M7 ██████████  2/2              complete
-M8 ███████░░░  2/3              ← in progress
+M8 ████████░░  2/3 + S22 built  ← in progress: CloudFront awaits account verification
 M9 ░░░░░░░░░░  0/2
                21/24 sessions
 ```
@@ -205,7 +206,8 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 
 - [x] **S20** — AWS account, budget alert, Terraform base, GitHub OIDC
 - [x] **S21** — Archiver writing partitioned events to S3
-- [ ] **S22** — CloudFront + Lambda public demo
+- [ ] **S22** — CloudFront + Lambda public demo — *built and applied except the CloudFront
+  distribution, which AWS refuses until the account is verified (support case open)*
 
 **Exit criteria**
 
@@ -213,9 +215,11 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
   `34471965342` on `dd7f802`, and on every merge to `main` since
 - [x] S3 objects land under correct date/hour partitions and replay reads them back — hour
   `2026-09-11T12` of all four topics, verified by replay Jobs under their own read-only role
-- [ ] A public HTTPS URL serves the dashboard; Lambda lookup returns real data
-- [ ] `terraform destroy` removes everything cleanly
-- [ ] **AWS billing console reads $0.00**
+- [ ] A public HTTPS URL serves the dashboard; Lambda lookup returns real data — **half**: the lookup
+  function answered from the real table on 2026-09-11 (30 shipments, a full plan and incidents for
+  `SHP-HYD-0018`); the public URL waits for AWS to allow CloudFront on this account
+- [ ] `terraform destroy` removes everything cleanly — not yet run; it follows the URL
+- [ ] **AWS billing console reads $0.00** — read at the end of the month
 
 ---
 
@@ -2323,33 +2327,128 @@ pairs, not a map.
 
 ---
 
+## S22 — A public view of the archive · 2026-09-11 · M8
+
+The live map cannot be public, because its API runs on a laptop with no public address. So S22
+builds a second, public view that is fed by what AWS already holds, the S21 archive, and says so on
+screen. Two Lambda functions in a new module, `functions/public-view`: an **index function** that S3
+wakes whenever the archiver finishes a file, which reads it once and folds it into a DynamoDB table,
+and a **lookup function** that answers the dashboard's own four `GET`s from that table. The dashboard
+gains an archive build. CloudFront was to put both behind one HTTPS address, and that is the one
+piece AWS refused: the account is too new, and has to be verified by AWS Support before it may create
+a distribution. Everything behind CloudFront is applied and was verified against the real account.
+The design is [ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md).
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| What feeds the public page | **Index each archive file once, on arrival, into DynamoDB**; the page reads only the table. S3 requests grow with what the laptop produced, never with visitors | The lookup reads the archive per request. Every cache miss pays for listings (12.5× a read) and a cold function re-reads the window: roughly seventy cold misses a month reach the one-cent alert. Or a cluster job publishing the dashboard API's snapshot: a third AWS writer on the laptop, the archiver's write budget spent twice, and ETAs published as current long after their run |
+| Table capacity | **Provisioned, ten units each way**, inside the always-free 25. Over capacity throttles; it does not bill | On-demand, which bills per request and has no free allowance |
+| Table layout | **One partition per shipment, one row per fact** (`POSITION`, `STOP#<id>`, `INCIDENT#<id>`), every write a single conditional update | One document per shipment. Three indexer copies run at once when an hour closes, and read-modify-write would let the last one undo the others |
+| Reordering and repeats | **Positions and stops are written only if strictly newer in event time; an incident's raise and clear write disjoint attributes.** Re-indexing, or indexing out of order, leaves the same table | Idempotency by remembering which files were indexed: a second store that can disagree with the first |
+| What the public page shows | **The live API's wire shapes, minus estimates, manifests and trails.** Stop status, "at a stop" and "delivered" decided as the dashboard API decides them | Showing the last archived ETA: a forecast from a run that may have ended days ago, and nothing on screen could say so |
+| A re-run over the same shipment id | **Only the latest journey counts**, from the most recent arrival at the plan's origin; a departure older than its arrival is from an earlier visit | Taking the newest fact per stop: after a demonstration reset, a truck at its first stop would read as delivered |
+| Where plans come from | **`docs/samples/lanes.json`, packaged by the build** from where it is committed | A copy in the function, or the itinerary collection, which the function cannot reach |
+| Lambda language | **Java 21**, no Spring, clients built by hand, events read with `EventJson` | TypeScript: a faster cold start, and a second way of parsing the platform's events |
+| Deployment package | **A zip with classes at the root and jars under `lib/`** | A shaded jar, which merges every dependency's `META-INF` service files, where the SDK and Jackson both find their parts |
+| Who owns the functions' code | **Terraform creates the functions and ignores their zip; CI's `publish-public` job replaces the code on every merge** | Terraform deploying code: the next laptop apply would put back whatever zip that laptop last built |
+| The CI role's first permissions | **Each names one resource**: write the site bucket, invalidate the distribution, update the two functions' code | A broader grant "for now" |
+| Basemap on the public page | **OpenFreeMap's vector style**: no key, no signup | OpenStreetMap's own raster tiles, whose usage policy excludes a public site; a keyed provider, whose key would ship in the bundle anyway |
+| Custom domain | **None: `*.cloudfront.net`** comes with a certificate | Route 53, $0.50 a month for a hosted zone |
+
+### What surprised me
+
+**CloudFront is locked on a new account.** The apply created 18 of 23 resources and stopped; its output
+was cut off before the error. CloudTrail had the reason, from `CreateDistributionWithTags`:
+`AccessDenied: Your account must be verified before you can add new CloudFront resources`. It is a
+support case (Account and billing, free on the Basic plan), not a quota that can be requested.
+Terraform released its lock and saved state cleanly, so the next apply resumes with the five
+resources that remain.
+
+**Every production build of the dashboard has been missing MapLibre's worker, since S15.** MapLibre 6
+finds its worker with `new URL(\`./${name}\`, import.meta.url)`, and Vite only copies files it can see
+as a static URL, so the worker was never emitted. Vector tiles and every GeoJSON source are processed
+in it: routes, geofences and trails never drew in `npm run preview` or in the cluster's nginx image.
+Raster tiles and DOM markers do not need it, so the page looked nearly right, and the dev server,
+which serves MapLibre out of `node_modules`, never had the problem. The public build's vector basemap
+drawing land and sea but no roads, in a headless browser, is what gave it away. The worker is now
+bundled through `?worker&url` and handed to `setWorkerUrl`.
+
+**The SDK added an HTTP client under a new name, and the exclusions stopped working.** Listing the
+Lambda zip found 2.3 MB of Apache HttpClient 5. SDK 2.54 depends on `apache5-client`, and an exclusion
+list naming `apache-client` excludes nothing new. The archiver has carried it unused since S21.
+
+**Since October 2025, CloudFront needs two permissions on a new function URL.** `lambda:InvokeFunctionUrl`
+alone, which most examples show, now gets a 403 that looks like a signing problem;
+`lambda:InvokeFunction` is required as well.
+
+**An hour of derived events is almost all estimates.** One file held 11,858 lines, of which 11,746
+were `EtaUpdated`, which the index skips. What reaches the table from it is 112 rows.
+
+**This account's Lambda concurrency limit is 10**, the default for a new account, and reserving any of
+it is refused. It works in the design's favour: uncached requests are throttled rather than billed,
+and an asynchronous invocation throttled by it is retried by S3 for up to six hours.
+
+**The backfill script died on Windows line endings.** Python on Windows ends lines with `\r\n`, and
+bash's arithmetic refuses `0\r`. The run indexed its whole first batch and then crashed reporting it,
+which Linux, and so CI, would never show.
+
+**`StreamBroadcasterTest` failed once, on time.** A wall-clock ceiling (200 publishes in under 2 s)
+read 2,761 ms while a software-rendered browser and three integration tests shared the machine. It
+passes alone and has passed in every CI run. The module was not changed; the ceiling is noted as
+load-sensitive rather than loosened.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| Plan against the real account | 23 to add, 0 to change, 0 to destroy |
+| Apply | 18 created; `CreateDistributionWithTags` refused with `AccessDenied` (account verification), read from CloudTrail |
+| **Backfill through the real index function** | 12 archive files (hours 12 and 13 of 2026-09-11, three topics): 298 rows written, 0 unreadable lines. Run again: every position row "already newer", nothing changed |
+| **The S3 notification** | A byte-identical copy of one archive file under a new name was indexed 2 seconds later, from a URL-encoded key; the copy was then deleted |
+| **Lambda lookup returns real data** | Invoked with CloudFront's request shape: 30 shipments across four lanes, 3 open exceptions, archived through 13:37 UTC. `SHP-HYD-0018` in full: three planned stops with names and fence sizes, a 6,000 s dwell at Genome Valley (the catalogue's scheduled dwell, rediscovered by the geofencer), one open and one cleared temperature excursion |
+| Cold start | 4.8 s for the first lookup; the index's largest invocation took 2.9 s and 307 MB of 1 GB |
+| The bare function URL, unsigned | `403 {"Message":"Forbidden"}`: nothing reaches the lookup except with an AWS signature |
+| **The archive page in a browser** | Headless Chrome against the archive build, with the real lookup behind a local stand-in for CloudFront: status bar "archive, archived through", 30 markers, OpenFreeMap basemap, and a selected truck's route and geofence. Before the worker fix: no roads, no route. Also in the dev server |
+| Archive bundle | Contains the OpenFreeMap style, and no `localhost:18083`, no `EventSource`, no OpenStreetMap tile URL. `public-publish.sh` checks the same three before uploading |
+| `./mvnw -pl functions/public-view -am verify` | 23 unit tests and `PublicViewIT` (DynamoDB Local and S3 emulator) pass |
+| `./mvnw verify`, the whole reactor | Green across two runs: the first failed only `StreamBroadcasterTest`'s timing ceiling (see above), and the rest resumed from `dashboard-api` with every unit test and IT passing, including `ArchiverIT` without Apache HttpClient 5 |
+| Dashboard | lint clean, 39 tests, typecheck and build |
+| `terraform validate` and `fmt` | Clean |
+
+---
+
 ## Next up
 
-**S22 — a public URL.** M8's last three exit criteria: a public HTTPS address serving the dashboard,
-a Lambda lookup returning real data, and a `terraform destroy` that removes everything, all with the
-bill at $0.00.
+**Finish S22 once AWS verifies the account for CloudFront.** A support case is open (Account and
+billing). When AWS confirms:
 
-The live map cannot be what is public, because its API runs on a laptop with no public address, which
-is exactly why deployment is pulled. So the public page has to be fed by something AWS holds, and
-the archive is the only real data there. The design question S22 has to settle first is what a
-stranger sees: a static build of the dashboard served from CloudFront, with a Lambda answering from
-the archive. Three constraints fall out of S21:
+1. `./scripts/infra-up.sh --auto-approve` **in a terminal of its own**. A distribution waits for global
+   deployment, which takes several minutes. The apply resumes with the five resources that remain,
+   and sets `PUBLIC_SITE_BUCKET` and `PUBLIC_DISTRIBUTION_ID`, which switch CI's `publish-public` job on.
+2. `./scripts/public-publish.sh`: fills the site bucket. The next merge does the same.
+3. Check M8's third criterion at the real address: the page, and `/api/shipments/<id>` through it.
+   (The bare function URL already refuses an unsigned request with 403.)
+4. Then the fourth: `./scripts/infra-down.sh`, and confirm nothing tagged `Project=fleet-tracker`
+   remains. This deletes the archive too; it is a copy, and the next run of the platform refills it.
+   `infra-up.sh`, `aws-link.sh` and `public-backfill.sh` bring everything back.
+5. The fifth, $0.00 on the bill, is read at the end of the month.
 
-- **Positions expire after three days.** A public page reading them shows nothing once the cluster
-  has been stopped for a long weekend. The exception and derived topics keep thirty days, and a
-  shipment's arrivals, departures and incidents may be the better thing to show anyway.
-- **Every read is a request on the same one-cent budget.** A Lambda that reads S3 per page view is
-  a GET per visitor; the answer has to be cached, at CloudFront or in the function.
-- **The CI role still has no permissions.** Publishing the static build is the first job that needs
-  one, and it should arrive scoped to that one bucket, with the reason beside it.
+If verification is refused or drags on: a Lambda function URL is HTTPS on its own, and the lookup
+could serve the dashboard's static files as well. That trades away the cache, so every view is an
+invocation; the concurrency limit and the free million keep it at $0.00, but it gives up ADR 0003's
+central property, and it should be a decision rather than a quiet fallback.
 
-The OpenStreetMap tile policy stops being theoretical at a public address; the keyed vector style
-behind `VITE_BASEMAP_STYLE` is needed.
+**`StreamBroadcasterTest.aStalledViewerNeverBlocksTheProducer`** has a wall-clock ceiling that a busy
+machine can break. If it fails in CI, make the bound relative (compare against an unstalled baseline)
+rather than raising the number.
 
 **The write budget, stated honestly.** One file per topic per hour is 2,880 writes a month if the
 cluster runs continuously, which is over the ~2,000 the one-cent alarm allows. It runs during
-sessions, so real usage is a few hundred. If it is ever left running for weeks, the alarm is what
-says so, which is the alarm doing its job.
+sessions, so real usage is a few hundred. The index adds one read per file of three of the four
+topics, and reads are a twelfth of the price. If the cluster is ever left running for weeks, the alarm
+is what says so, which is the alarm doing its job.
 
 Carried from S20: the Free-plan account must be upgraded or wound down (`infra-down.sh` first)
 before **2027-03-10**. Kind generates a new signing key per cluster, so **`aws-link.sh` must run

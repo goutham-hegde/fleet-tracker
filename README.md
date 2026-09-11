@@ -6,7 +6,7 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** in development — milestone M7 of M9 complete, session 19 of 24.
+> **Status:** in development — milestone M7 of M9 complete, M8 in progress, session 22 of 24.
 > See **[PROGRESS.md](PROGRESS.md)** for the build log, decisions taken, and what is next.
 > Architecture decision records land in `docs/adr/` as they are written.
 
@@ -32,6 +32,7 @@ This platform normalizes all of it into one stream and one live view.
 
 ```
 services/       Spring Boot services: ingest, tracking, shipments, exceptions, dashboard API
+functions/      AWS Lambda code: the public view's indexer and lookup
 tools/          fleet-simulator — the synthetic data source
 libs/events/    canonical event model shared by everything
 libs/reference/ scheduled stops and distance maths, shared by two consumers
@@ -846,8 +847,8 @@ object ArgoCD manages. Both cases here are in `deploy/argocd/application.yaml`:
 ## AWS
 
 The platform runs on the laptop. AWS holds only what can exist there at **$0.00** under the
-always-free allowances: IAM, a budget, a few megabytes of S3, and (from S22) Lambda behind
-CloudFront. Nothing that could run Kafka or MongoDB is free, so there is no cloud cluster and no
+always-free allowances: IAM, a budget, a few megabytes of S3, a small DynamoDB table, and Lambda
+behind CloudFront. Nothing that could run Kafka or MongoDB is free, so there is no cloud cluster and no
 cloud overlay. The reasoning and the prices are in
 [ADR 0001](docs/adr/0001-aws-at-zero-dollars.md).
 
@@ -856,7 +857,7 @@ Two Terraform stacks under `infra/`:
 | Stack | Holds | State |
 |---|---|---|
 | `infra/bootstrap` | A zero-spend budget, then the state bucket, which depends on it | A local file (gitignored). A stack cannot keep its state in a bucket it is about to create |
-| `infra/cloud` | Everything else: the GitHub OIDC provider and the CI role (S20); the cluster's OIDC provider, the archive bucket and two pod roles (S21) | `s3://fleet-tracker-tfstate-<account>/cloud/`, locked with a lock file in the bucket |
+| `infra/cloud` | Everything else: the GitHub OIDC provider and the CI role (S20); the cluster's OIDC provider, the archive bucket and two pod roles (S21); the public view's table, two functions, site bucket and CloudFront distribution (S22) | `s3://fleet-tracker-tfstate-<account>/cloud/`, locked with a lock file in the bucket |
 
 **The budget counts gross cost.** On AWS's credit-based plans, usage is paid from credits first, so
 the bill reads $0.00 while real resources are being consumed. The budget excludes credits and emails
@@ -881,8 +882,9 @@ gh api repos/goutham-hegde/fleet-tracker/actions/oidc/customization/sub --jq .su
 CI checks this from both sides. A push to `main` must become the role. A pull request must be
 refused, and the check first confirms that its own subject differs from the trusted one *only* in
 being a pull request, because a policy naming a subject in the wrong format refuses everything and
-looks exactly like one that works. The role has no permissions yet; later sessions attach exactly
-what their jobs need.
+looks exactly like one that works. Its only permissions are the public view's publishing job's
+(S22), and each names a single resource: write the site bucket, invalidate the distribution, replace
+the two functions' code.
 
 **The laptop** signs in with `aws login`, which issues short-lived credentials from a console
 session. No access key is written anywhere.
@@ -941,6 +943,45 @@ Replay runs as a Job under the read-only role. By default it only verifies: ever
 under the hour it claims and has an event id, and duplicates are counted by event id. Republishing
 onto a topic has to be asked for, and republished records carry a `fleet.replayed-from` header that
 the archiver skips, so a replay never doubles the archive.
+
+### The public view
+
+The live map cannot be public: its API runs on the laptop, which has no public address. So the public
+address shows the archive instead, and says so on screen. The design is recorded in
+[ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md).
+
+```
+archiver -> S3 archive/ --(file finished)--> index function --(folds it once)--> DynamoDB table
+                                                                                     ^
+browser -> CloudFront -+- /*     -> site bucket: the dashboard, built in archive mode  |
+                       +- /api/* -> lookup function (function URL) --------------------+
+```
+
+- **The index function** (`functions/public-view`) is woken by S3 each time the archiver finishes a
+  file. It reads it once and folds tens of thousands of lines into a few dozen rows: the newest fix
+  per shipment, each announced arrival and departure, each incident. Every write is conditional, so
+  indexing a file twice or out of order leaves the same table. Estimates are left out, because a
+  forecast from a run that may have ended days ago is not information.
+- **The lookup function** answers the dashboard's own four `GET`s in the live API's shapes. Plans
+  come from the committed lane catalogue. It is reachable only through CloudFront, which signs its
+  requests; the function URL refuses anything else.
+- **The dashboard** is built a second way, with `VITE_ARCHIVE_MODE=true`: no live stream, a
+  one-minute poll, "archived through" in place of "live", and OpenFreeMap's vector basemap, which
+  needs no key.
+
+Every part is chosen for how it bills. S3 is read once per archived file, so its requests grow with
+what the laptop produced and not with visitors. Visitors cost CloudFront, Lambda and DynamoDB requests,
+all inside allowances that do not expire, and the table's capacity is provisioned inside the free
+25 units, so a flood of visitors is throttled rather than billed.
+
+```bash
+./scripts/public-publish.sh           # functions, then the dashboard; what CI runs on every merge
+./scripts/public-backfill.sh          # index what was archived before the notification existed
+./scripts/public-backfill.sh 2026-09-11   # or one UTC day
+```
+
+CI's `publish-public` job runs the first of these on every merge to `main`, behind the same test jobs
+as the image publish.
 
 ## The demo path, without containers
 
