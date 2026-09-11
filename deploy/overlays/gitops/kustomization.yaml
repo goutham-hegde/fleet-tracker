@@ -18,7 +18,7 @@
 # ---------------------------------------------------------------------------------------------
 # The tags below are written by CI, not by hand.
 #
-# `.github/workflows/ci.yml` publishes seven images tagged with the commit SHA, then runs
+# `.github/workflows/ci.yml` publishes eight images tagged with the commit SHA, then runs
 # scripts/set-image-tag.sh over this file and pushes the result to the `deploy` branch. ArgoCD
 # watches that branch, sees the changed tags, and rolls the cluster forward. That is the entire
 # mechanism -- there is no webhook, no deploy key, and nothing outside this house ever connects in.
@@ -29,7 +29,7 @@
 # second copy of the manifests. Nothing triggers CI on it, which is also what stops the pipeline
 # from building its own commits for ever.
 #
-# The tags are all the same SHA today and always will be under this workflow, because all seven
+# The tags are all the same SHA today and always will be under this workflow, because all eight
 # images are published from one commit by one job. They are listed separately anyway: the day one
 # service is rolled back on its own, this is the file that says so, and a single shared value would
 # have to be split before it could express that.
@@ -59,6 +59,8 @@ images:
   - name: ghcr.io/goutham-hegde/fleet-tracker/dashboard
     newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
   - name: ghcr.io/goutham-hegde/fleet-tracker/fleet-simulator
+    newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
+  - name: ghcr.io/goutham-hegde/fleet-tracker/archiver
     newTag: a925aaa6b67158b98c5c415d4baefdac61b78b74
 
 patches:
