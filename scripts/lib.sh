@@ -42,6 +42,28 @@ require() {
   command -v "$1" >/dev/null 2>&1 || die "'$1' not found on PATH. $2"
 }
 
+# Download images into the Kind node before anything waits on the pods that use them.
+#
+# A new node has no images, and on a slow connection Kafka and MongoDB alone took fifteen minutes to
+# arrive (S24's fresh-clone test). A rollout wait with a timeout cannot tell "downloading" from
+# "broken", so the first run on a new machine failed with nothing but "timed out waiting for the
+# condition". Pulling first, with no timeout and a line saying what is happening, keeps every later
+# wait about the application. Images already on the node are skipped, so this costs nothing on a
+# cluster that has run before.
+node_pull() {
+  local node="$CLUSTER_NAME-control-plane" image ref
+  for image in "$@"; do
+    case "$image" in
+      [!/]*.[!/]*/*) ref="$image" ;;             # the first segment is a registry: ghcr.io/..., registry.k8s.io/...
+      */*)   ref="docker.io/$image" ;;
+      *)     ref="docker.io/library/$image" ;;
+    esac
+    docker exec "$node" crictl inspecti "$ref" >/dev/null 2>&1 && continue
+    log "Downloading $ref into the cluster (first run only; can take minutes)"
+    docker exec "$node" crictl pull "$ref" >/dev/null || die "could not download $ref"
+  done
+}
+
 # Derived state, and how to clear it safely. Used by stack-up.sh on every full run and by
 # load-test.sh before a pod-kill run.
 #

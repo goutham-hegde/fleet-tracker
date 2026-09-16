@@ -35,7 +35,15 @@ log "Installing KEDA $KEDA_VERSION"
 # The release manifest carries its own namespace (keda), three deployments and the CRDs. Nothing of
 # this project's is in it, which is why it lives outside deploy/ : it is a cluster add-on, in the
 # same category as a CNI or an ingress controller, not part of the application.
-kubectl apply --server-side -f "$KEDA_MANIFEST"
+#
+# Downloaded once to a file, so its images can be pulled into the node before the timed waits below
+# (see node_pull in lib.sh), and the same bytes are then applied.
+manifest="$(mktemp)"
+trap 'rm -f "$manifest"' EXIT
+curl -fsSL "$KEDA_MANIFEST" -o "$manifest" || die "could not download $KEDA_MANIFEST"
+mapfile -t KEDA_IMAGES < <(grep -h '^\s*image:' "$manifest" | awk '{print $2}' | tr -d '\r"' | sort -u)
+node_pull "${KEDA_IMAGES[@]}"
+kubectl apply --server-side -f "$manifest"
 
 log "Waiting for the operator"
 kubectl rollout status deployment/keda-operator -n keda --timeout=300s

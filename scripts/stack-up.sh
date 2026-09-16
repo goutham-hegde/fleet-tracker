@@ -41,14 +41,14 @@ if [ "$DEPLOY_ONLY" = false ]; then
     "$REPO_ROOT/scripts/cluster-start.sh" >/dev/null 2>&1 || true
   fi
 
-  "$REPO_ROOT/scripts/platform-up.sh" >/dev/null
+  "$REPO_ROOT/scripts/platform-up.sh"
   ok "Kafka, MongoDB and the topics are up"
 
   # KEDA before the overlay, not after. The overlay contains a ScaledObject, which is a kind the
   # API server does not recognise until KEDA's CRDs exist -- so applying in the other order fails
   # with "no matches for kind", which reads like a broken manifest and is a missing operator.
   if ! kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
-    "$REPO_ROOT/scripts/keda-up.sh" >/dev/null
+    "$REPO_ROOT/scripts/keda-up.sh"
   fi
   ok "KEDA is installed"
 

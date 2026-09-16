@@ -15,13 +15,17 @@ kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
 # thanks to --if-not-exists.
 kubectl delete job kafka-topics -n fleet --ignore-not-found >/dev/null 2>&1 || true
 
+# Before the apply, so the timed waits below measure the platform starting rather than a download.
+mapfile -t PLATFORM_IMAGES < <(grep -rh '^\s*image:' "$REPO_ROOT/deploy/base/platform" | awk '{print $2}' | tr -d '\r' | sort -u)
+node_pull "${PLATFORM_IMAGES[@]}"
+
 log "Applying deploy/base/platform (Kafka, MongoDB, topics)"
 kubectl apply -k "$REPO_ROOT/deploy/base/platform"
 
 # rollout status waits on the readiness probes, which for both of these run a
 # real client command rather than a port check -- so "available" here means the
 # broker answers a metadata request and Mongo answers a ping.
-log "Waiting for Kafka (this pulls a ~400 MB image on first run)"
+log "Waiting for Kafka"
 kubectl rollout status statefulset/kafka -n fleet --timeout=300s
 
 log "Waiting for MongoDB"
