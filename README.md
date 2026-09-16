@@ -18,8 +18,11 @@ This platform normalizes all of it into one stream and one live view.
 
 ## Quick start
 
-Everything below runs on one machine, with no cloud account. Expect about ten minutes the first
-time, most of it downloading images and dependencies.
+Everything below runs on one machine, with no cloud account. The first run downloads a few gigabytes
+(container images, Maven and npm dependencies), and on a slow connection that is most of the time
+it takes: Kafka's and MongoDB's images alone took fifteen minutes on the connection this was tested
+on. The scripts say what they are downloading, and nothing times out while they do. Later runs
+start in a few minutes.
 
 **You need** Docker with **10–12 GB** of memory allocated (Docker Desktop: Settings → Resources),
 Java 21, [kind](https://kind.sigs.k8s.io/), kubectl, [mongosh](https://www.mongodb.com/try/download/shell),
