@@ -41,7 +41,7 @@ log "Installing KEDA $KEDA_VERSION"
 manifest="$(mktemp)"
 trap 'rm -f "$manifest"' EXIT
 curl -fsSL "$KEDA_MANIFEST" -o "$manifest" || die "could not download $KEDA_MANIFEST"
-mapfile -t KEDA_IMAGES < <(grep -h '^\s*image:' "$manifest" | awk '{print $2}' | tr -d '\r"' | sort -u)
+mapfile -t KEDA_IMAGES < <(grep -h '^\s*image:' "$manifest" | awk 'NF >= 2 {print $2}' | tr -d '\r"' | sort -u)
 node_pull "${KEDA_IMAGES[@]}"
 kubectl apply --server-side -f "$manifest"
 

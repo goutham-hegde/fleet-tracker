@@ -53,6 +53,7 @@ require() {
 node_pull() {
   local node="$CLUSTER_NAME-control-plane" image ref
   for image in "$@"; do
+    [ -n "$image" ] || continue
     case "$image" in
       [!/]*.[!/]*/*) ref="$image" ;;             # the first segment is a registry: ghcr.io/..., registry.k8s.io/...
       */*)   ref="docker.io/$image" ;;

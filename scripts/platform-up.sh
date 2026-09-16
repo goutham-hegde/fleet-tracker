@@ -16,7 +16,7 @@ kubectl config use-context "kind-$CLUSTER_NAME" >/dev/null
 kubectl delete job kafka-topics -n fleet --ignore-not-found >/dev/null 2>&1 || true
 
 # Before the apply, so the timed waits below measure the platform starting rather than a download.
-mapfile -t PLATFORM_IMAGES < <(grep -rh '^\s*image:' "$REPO_ROOT/deploy/base/platform" | awk '{print $2}' | tr -d '\r' | sort -u)
+mapfile -t PLATFORM_IMAGES < <(grep -rh '^\s*image:' "$REPO_ROOT/deploy/base/platform" | awk 'NF >= 2 {print $2}' | tr -d '\r' | sort -u)
 node_pull "${PLATFORM_IMAGES[@]}"
 
 log "Applying deploy/base/platform (Kafka, MongoDB, topics)"
