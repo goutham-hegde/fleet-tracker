@@ -3,8 +3,8 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-16 · **Current position:** S23 of 24 done; M9 in progress, M8's public
-address still awaiting AWS account verification for CloudFront
+**Last updated:** 2026-09-16 · **Current position:** S24 of 24 done; M9 complete. M8's public
+address still awaits AWS account verification for CloudFront, the plan's last open item
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -17,8 +17,8 @@ M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
 M7 ██████████  2/2              complete
 M8 ████████░░  2/3 + S22 built  ← CloudFront awaits account verification
-M9 █████░░░░░  1/2              ← in progress: S23 done, S24 next
-               22/24 sessions
+M9 ██████████  2/2              complete
+               23/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -228,7 +228,7 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 **Capability:** hard questions answered with numbers and documents instead of hand-waving.
 
 - [x] **S23** — Load test + resilience (pod-kill, no event loss)
-- [ ] **S24** — ADRs, README, scripted demo
+- [x] **S24** — ADRs, README, scripted demo
 
 **Exit criteria**
 
@@ -236,8 +236,13 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 - [x] Pod-kill test shows produced count **==** persisted count — 148,349 == 148,349 over six
   `kill -9`s including the broker and the database, nothing dead-lettered. One byte-identical
   repeat, which is the documented trade rather than a loss
-- [ ] Four ADRs written, each naming the alternative rejected and why
-- [ ] A stranger can clone the repo and run the stack from the README alone
+- [x] Four ADRs written, each naming the alternative rejected and why — [0004–0007](docs/adr/)
+  on the core platform, beside M8's three on AWS; every one has an *Alternatives rejected* section
+- [x] A stranger can clone the repo and run the stack from the README alone — a fresh clone from
+  GitHub on a new cluster, following only the Quick start: platform up, dashboard serving, and
+  `scripts/walkthrough.sh` passing all seven acts. It took a fix first: see S24
+
+**All four pass as of 2026-09-16. M9 is complete.**
 
 ---
 
@@ -2501,12 +2506,107 @@ a kill. Two runs each finding it once is better evidence than one clean run woul
 
 ---
 
+## S24 — A stranger's first run · 2026-09-16 · M9
+
+M9's last two criteria are about someone who was not here. Could they learn why the platform is
+built this way without reading 2,500 lines of log? And could they clone it and get it running from
+the README alone? This session wrote the four design records that were missing, gave the running
+platform a guided walkthrough, and then tested the README the only honest way: a fresh clone from
+GitHub, a brand-new cluster, and nothing but the Quick start. That test failed the first time, and
+the failure is the most useful thing the session produced.
+
+### Built
+
+- **Four ADRs on the core platform**, 0004–0007, next to the three AWS ones from M8: at-least-once
+  processing made harmless by derived ids; one HTTP gateway that dead-letters rather than refuses;
+  manifests as a typed envelope around a per-customer body; deployment pulled by ArgoCD and scaled
+  on consumer lag. Each has an *Alternatives rejected* section drawn from the decision tables of
+  the session that made the call, and 0004 cites S23's crash test as its evidence.
+- **`scripts/walkthrough.sh`**, seven acts against the running cluster, pausing between them in a
+  terminal. It sends a sample from each feed through the gateway. It sends one telematics message
+  twice and prints both Kafka records, which carry the same event id. It sends a corrupt message
+  and prints the dead-letter record with its headers. The shipment service returns a 422 for a
+  manifest that breaks its customer's schema and a 503 for a customer with no schema. The act on
+  rules summarises open incidents. The last act crashes the tracking processor with `kill -9`
+  from the node and follows its lag back to zero. Kafka records are read from offsets recorded
+  before each request, so nothing depends on a consumer having joined in time.
+- **A Quick start at the top of the README**: prerequisites in one paragraph, four commands, what
+  each address should show, what the archiver does without AWS, teardown and four failure modes.
+  Also an ADR index, a prerequisites table with install commands and optional tools marked, and a
+  current status line.
+- **`node_pull` in `lib.sh`**, used by `platform-up.sh` and `keda-up.sh`: images are downloaded
+  into the Kind node, with a line saying so, before any timed wait begins. `stack-up.sh` no longer
+  hides those two scripts' output.
+- **`preflight.sh` checks what the local stack needs**: mongosh and curl are now required, helm is
+  gone (nothing used it), and terraform joins aws and gh as optional.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| Which four ADRs | **Four new ones on the core platform**, in addition to M8's three | Counting M8's three and writing one more. All three existing records are about the AWS edge; the hard questions about this platform are what happens to an event when a pod dies, and why one gateway takes all four feeds |
+| When the records are dated | **The session that made the decision**, with "recorded in S24" | Dating them today, which would present hindsight as a decision made now |
+| What "scripted demo" means | **A walkthrough of claims against the running cluster** | A second start-everything script. `stack-up.sh` and `demo.sh` already start everything; nothing showed *why* any of it is built the way it is |
+| How the walkthrough finds its records | **End offsets recorded before the request, read back per partition** | Tailing the topic in the background. It worked when tried, and only because a sleep happened to be long enough |
+| How the README was tested | **A fresh clone from GitHub, on a new cluster with its own name**, with the real cluster stopped | Re-reading the README, or running it in the working copy against a warm cluster. Both would have passed, as the first failure shows |
+| Fixing slow first downloads | **Pull into the node first, announced and without a timeout**; timed waits then only measure startup | Raising the rollout timeouts. That still fails on a slower connection, still says nothing while it waits, and makes a genuinely broken pod take longer to report |
+| Where images are pulled | **Inside the node, with `crictl`** | `docker pull` on the host followed by `kind load`, which would survive a cluster being recreated. Not tried: it adds a copy of every image and a second path to go wrong, while `crictl` is the path the node would have used anyway |
+
+### What surprised me
+
+**The README failed its first honest test, and not because of anything in it.** On a new node,
+Kafka's image took 9 min 45 s to download and MongoDB's about 15 minutes. `platform-up.sh` waits
+300 seconds for Kafka to become ready. So the stranger's first run ended after six minutes with
+`error: timed out waiting for the condition`, and nothing else, because `stack-up.sh` sent the
+script's output to `/dev/null`. The working cluster already had those images, so no run against it
+could have shown this. Every script was correct. Only the environment was different, and
+the only way to see that was to run the test without a warm cache.
+
+**A manifest can contain `image:` with nothing after it.** KEDA's release file has a schema property
+named `image`. The first version of the new pull step read it as an image with an empty name, and
+tried to download `docker.io/library/`. Reading every line that starts with `image:` is a guess
+about YAML, and the fix only accepts lines that have a value.
+
+**"Killed for low memory" did not mean killed.** With the sibling project's cluster using 3.4 GB,
+the host fell to about 1 GB of free RAM. The session's tooling reported two background runs as
+stopped, and one of them carried on and failed on its own later. That was how two copies of
+`stack-up.sh` ended up running against one cluster for a minute. Look at the process list before
+believing a status message.
+
+**The walkthrough's crash is visible in numbers without a load test.** At demo traffic a
+`kill -9` leaves the processor's committed offset frozen for about half a minute while lag climbs
+past a thousand, then it catches up to within a handful in one step: 1,072 on the working cluster
+and 1,256 on the fresh one.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `./scripts/walkthrough.sh --no-pause` on the working cluster | All seven acts in 90 s: every feed `202`, one event id on two records, `DEAD_LETTERED` with the source and reason in headers, `422` naming `/temperature/maxC`, `503` naming the missing customer, a `kill -9` and lag back to 4 |
+| Fresh clone, first run | **Failed**: `platform-up.sh` timed out while Kafka's and MongoDB's images were still downloading (see above) |
+| Fresh clone, after the fix, on a newly created cluster | Images announced and downloaded before the waits, then Kafka, MongoDB and topics up; the next step exposed the empty image name, fixed |
+| **Fresh clone, the Quick start end to end** | `preflight.sh` passed; `stack-up.sh` finished with every workload `Running` except the archiver, in `CreateContainerConfigError` with the documented no-AWS warning; ScaledObject `READY True`; `localhost:18080` returned `200`; `/api/meta` read 4 tracked shipments |
+| **The walkthrough from the fresh clone** | All seven acts, 1 min 56 s: the same ids, codes and dead letter, a critical temperature excursion and a route deviation already raised, and lag after the crash 1,256 → 2 |
+| `bash -n` on every changed script | Clean |
+
+The clone test changed one thing on purpose: the cluster was named `fleet-stranger` so the working
+cluster could be stopped rather than destroyed. It also ran with this machine's Maven and npm caches
+already warm, so a real stranger downloads more than this run did.
+
+### Left open
+
+- S22's CloudFront distribution, still waiting on AWS (below).
+- The archiver on the working cluster is at zero replicas, as the session found it.
+  `kubectl scale deployment/archiver -n fleet --replicas=1` after `aws login` resumes archiving.
+- The Quick start is tested on Windows with Git Bash only. The scripts use nothing Windows-specific
+  beyond `lib.sh`'s PATH additions, but no Linux or macOS machine has run them.
+
+---
+
 ## Next up
 
-**S24 closes M9 and the plan:** four ADRs, each naming the alternative it rejected; a README a
-stranger can clone and run start to finish; and a scripted demo. Two of M9's four exit criteria pass
-already — the figures are in [docs/performance.md](docs/performance.md) and the pod-kill run shows
-produced == persisted.
+**The plan is built.** 23 of 24 sessions are done, and M0–M7 and M9 are complete. What remains
+is S22's last step, which needs nothing from this repository except AWS's answer.
 
 **Finish S22 once AWS verifies the account for CloudFront.** A support case is open (Account and
 billing), filed 2026-09-13; AWS replied on 2026-09-15 that it had gone to their Specialized Service
