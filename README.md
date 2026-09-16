@@ -6,15 +6,96 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** in development — milestone M7 of M9 complete, M8 in progress, session 22 of 24.
-> See **[PROGRESS.md](PROGRESS.md)** for the build log, decisions taken, and what is next.
-> Architecture decision records land in `docs/adr/` as they are written.
+> **Status:** all 24 planned sessions built. M0–M7 and M9 complete; M8's public address waits on
+> AWS enabling CloudFront for the account. See **[PROGRESS.md](PROGRESS.md)** for the build log,
+> the decisions and what is next, and **[docs/adr/](docs/adr/)** for the design decisions.
 
 ## Why this exists
 
 Location and status data in logistics arrives from vendor telematics units, driver phone apps,
 carrier EDI feeds, and IoT sensors — each with a different shape, cadence, and reliability profile.
 This platform normalizes all of it into one stream and one live view.
+
+## Quick start
+
+Everything below runs on one machine, with no cloud account. Expect about ten minutes the first
+time, most of it downloading images and dependencies.
+
+**You need** Docker with **10–12 GB** of memory allocated (Docker Desktop: Settings → Resources),
+Java 21, [kind](https://kind.sigs.k8s.io/), kubectl, [mongosh](https://www.mongodb.com/try/download/shell),
+Node 20 or later, git and curl. On Windows, run every command below in **Git Bash**: `bash` from
+PowerShell is WSL, which has none of these tools. The full table, with install commands, is under
+[Prerequisites](#prerequisites).
+
+```bash
+git clone https://github.com/goutham-hegde/fleet-tracker.git
+cd fleet-tracker
+
+./scripts/preflight.sh    # checks each tool and Docker's memory; fix anything it names
+./scripts/stack-up.sh     # creates the Kind cluster and brings the whole platform up in it
+```
+
+`stack-up.sh` creates a local Kubernetes cluster, starts Kafka and MongoDB, installs the KEDA
+autoscaler, builds the eight container images, loads the reference data, and deploys everything
+with `kubectl apply -k deploy/overlays/local`. When it finishes it lists the pods, all `Running`,
+and these addresses:
+
+| Open | What you should see |
+|---|---|
+| <http://localhost:18080> | A map of India with trucks moving on four freight lanes. Click one for its plan, geofences, trail and manifest |
+| <http://localhost:18083/api/meta> | `{"openExceptions":…,"trackedShipments":…}`, both climbing within a minute |
+
+Then let the platform demonstrate what it claims, one act at a time:
+
+```bash
+./scripts/walkthrough.sh      # seven acts, about 90 seconds; Enter moves to the next act
+```
+
+It sends each of the four feeds through the gateway, sends the same message twice to show both
+copies carry one event id, sends a corrupt message and finds it in the dead-letter topic, has the
+shipment service refuse a manifest that breaks its customer's contract, summarises the SLA
+incidents, and then crashes the tracking processor with `kill -9` and watches it catch up.
+
+**Without AWS**, one pod, `archiver`, stays in `CreateContainerConfigError`, naming a missing
+`archive-destination` ConfigMap. That is expected: it copies events to S3, and the rest of the
+platform does not depend on it. See [AWS](#aws) to connect one.
+
+**When you are done:**
+
+```bash
+./scripts/cluster-stop.sh     # stop the cluster, keeping its data; cluster-start.sh resumes it
+./scripts/cluster-down.sh     # or delete it entirely
+```
+
+**If something goes wrong:**
+
+- *A port is already in use.* The platform needs 18080–18083, 19092 and 37017 free on the host,
+  and fixes them when the cluster is created. Find the holder with `docker ps` or your OS's port
+  tools, then `cluster-down.sh` and `stack-up.sh` again.
+- *Pods restart or stay `Pending`.* Docker has too little memory. `preflight.sh` reports what it
+  has.
+- *The map is empty but pods are running.* The fleet takes about 20 seconds to start reporting.
+  Check `kubectl get pods -n fleet` for `fleet-simulator`, and `kubectl logs -n fleet deployment/ingest-gateway`.
+- *Every marker reads `DELIVERED`.* The derived state is from an earlier run. `stack-up.sh` clears
+  it each time it runs.
+
+The rest of this README is reference material: each component, how to run it on its own, and why
+it is built the way it is.
+
+## Design decisions
+
+| ADR | Decision |
+|---|---|
+| [0001](docs/adr/0001-aws-at-zero-dollars.md) | What runs in AWS, at $0: IAM, S3, Lambda, CloudFront, and no compute |
+| [0002](docs/adr/0002-the-cluster-as-its-own-identity-provider.md) | The local cluster is its own OIDC identity provider, so no pod holds an AWS key |
+| [0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md) | The public view is indexed as archive files arrive, never read per page view |
+| [0004](docs/adr/0004-at-least-once-with-derived-ids.md) | At-least-once processing, made harmless by ids derived from the facts |
+| [0005](docs/adr/0005-one-gateway-over-http-that-never-refuses.md) | One gateway, over HTTP, that dead-letters rather than refuses |
+| [0006](docs/adr/0006-manifests-typed-envelope-untyped-body.md) | Manifests: a typed envelope, an untyped body, a schema per customer |
+| [0007](docs/adr/0007-pulled-deployment-scaled-on-lag.md) | Deployment is pulled by ArgoCD, and scaling follows Kafka consumer lag |
+
+Each names the alternatives it rejected. Measured throughput, latency and crash behaviour are in
+[docs/performance.md](docs/performance.md).
 
 ## Stack
 
@@ -1027,17 +1108,19 @@ through the real endpoint, which is the only check that can tell.
 
 ## Prerequisites
 
-| Tool | Purpose |
-|---|---|
-| Java 21 | Services. Maven comes via the wrapper. |
-| Docker | Runs the Kind cluster. **Allocate 10-12 GB** — 8 GB is not enough for Kafka + Mongo + several JVMs + ArgoCD. |
-| kubectl | Ships with Docker Desktop. |
-| kind | Local Kubernetes. `winget install Kubernetes.kind` |
-| helm | Chart installs. `winget install Helm.Helm` |
-| terraform | AWS free-tier stack (M8). 1.10 or later, for S3-native state locking. `winget install Hashicorp.Terraform` |
-| aws | AWS CLI (M8). A release recent enough to have `aws login` (late 2025 onwards; 2.36 is in use here). `winget install Amazon.AWSCLI` |
-| mongosh | MongoDB shell, for inspecting the database by hand. `winget install MongoDB.Shell` |
-| Node 20+ | Dashboard. Developed against Node 24 and npm 11. |
+| Tool | Needed for | Install (Windows; any package manager elsewhere) |
+|---|---|---|
+| Git Bash | Windows only: every script is bash | Comes with [Git for Windows](https://git-scm.com/download/win) |
+| Java 21 | Building the services. Maven comes via the wrapper | `winget install EclipseAdoptium.Temurin.21.JDK` |
+| Docker | The Kind cluster. **Allocate 10–12 GB**; 8 GB is not enough | Docker Desktop |
+| kubectl | Everything in the cluster | Ships with Docker Desktop |
+| kind | The local Kubernetes cluster | `winget install Kubernetes.kind` |
+| mongosh | The seed scripts, and inspecting the database | `winget install MongoDB.Shell` |
+| Node 20+ | The walkthrough, and working on the dashboard. Developed against Node 24 and npm 11 | `winget install OpenJS.NodeJS.LTS` |
+| curl | The walkthrough and smoke tests | Comes with Git for Windows |
+| terraform | *Optional:* the AWS half (M8). 1.10 or later, for S3-native state locking | `winget install Hashicorp.Terraform` |
+| aws | *Optional:* the AWS half. Recent enough to have `aws login` (late 2025 onwards) | `winget install Amazon.AWSCLI` |
+| gh | *Optional:* pull requests and CI runs | `winget install GitHub.cli` |
 
 `winget` updates the *user* PATH, which existing shells do not see until they
 restart. `scripts/lib.sh` adds the install directories itself so the scripts work

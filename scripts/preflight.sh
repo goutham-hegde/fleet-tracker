@@ -15,21 +15,23 @@ check() {
   fi
 }
 
+# What the local platform needs: stack-up.sh, the seed scripts (mongosh) and the walkthrough (node).
 check java      'java -version 2>&1 | head -1'
 check docker    'docker --version'
 check kubectl   'kubectl version --client 2>/dev/null | head -1'
 check kind      'kind --version'
-check helm      'helm version --short'
-check terraform 'terraform version | head -1'
+check mongosh   'mongosh --version'
 check node      'node --version'
+check curl      'curl --version'
 check git       'git --version'
 
-# aws and gh are only needed from M8 / for pushing, so they are advisory.
-for opt in aws gh; do
+# Only the AWS half (terraform, aws) and pull requests (gh) need these. The local platform runs
+# without any of them; the archiver waits for AWS and nothing else notices.
+for opt in terraform aws gh; do
   if command -v "$opt" >/dev/null 2>&1; then
     ok "$(printf '%-10s %s' "$opt" "$($opt --version 2>&1 | head -1)")"
   else
-    warn "$(printf '%-10s missing (needed later: aws=M8, gh=push)' "$opt")"
+    warn "$(printf '%-10s missing (optional: terraform and aws for AWS, gh for pull requests)' "$opt")"
   fi
 done
 
@@ -42,7 +44,7 @@ ok "Docker daemon responding"
 mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
 mem_gb=$(( mem / 1024 / 1024 / 1024 ))
 if [ "$mem_gb" -lt 10 ]; then
-  warn "Docker has ${mem_gb}GB. Kafka + Mongo + 5 JVMs + ArgoCD wants 10-12GB."
+  warn "Docker has ${mem_gb}GB. Kafka, MongoDB and eight workloads want 10-12GB."
   warn "Raise it in Docker Desktop > Settings > Resources."
 else
   ok "Docker memory ${mem_gb}GB"
