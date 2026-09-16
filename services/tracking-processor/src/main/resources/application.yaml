@@ -145,11 +145,14 @@ management:
   endpoints:
     web:
       exposure:
-        # Health only, plus the build/version information the dashboard of a real deployment would
-        # read. Actuator can expose a great deal more -- environment, configuration properties,
-        # thread dumps -- and every one of those is a way to read this service's configuration over
-        # HTTP. Exposure is opt-in for that reason, and this list is the whole of it.
-        include: health,info
+        # Health, plus the build/version information the dashboard of a real deployment would
+        # read, plus metrics: the load test (scripts/load-test.sh) reads the stored latency's
+        # percentiles from /actuator/metrics. Actuator can expose a great deal more -- environment,
+        # configuration properties, thread dumps -- and every one of those is a way to read this
+        # service's configuration over HTTP. Metrics are counts and timings, not configuration, and
+        # this port is reached only from inside the cluster. Exposure is opt-in for that reason,
+        # and this list is the whole of it.
+        include: health,info,metrics
 
   endpoint:
     health:

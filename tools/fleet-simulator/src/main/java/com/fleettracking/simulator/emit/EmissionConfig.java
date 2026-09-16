@@ -60,7 +60,9 @@ public class EmissionConfig {
           new HttpMessageSink(
               properties.http().baseUrl(),
               properties.http().timeout(),
-              properties.http().queueCapacity()));
+              properties.http().queueCapacity(),
+              properties.http().workers(),
+              properties.http().reportEvery()));
     }
 
     // Transport faults wrap the real sinks rather than sitting beside them, so what is captured to

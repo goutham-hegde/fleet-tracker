@@ -2,6 +2,7 @@ package com.fleettracking.simulator;
 
 import com.fleettracking.simulator.fault.DisruptionScheduler;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -38,6 +39,7 @@ public class SimulationRunner implements SmartLifecycle {
   private volatile Simulation simulation;
   private ScheduledExecutorService executor;
   private volatile boolean running;
+  private volatile Instant stopAt;
 
   public SimulationRunner(
       SimulatorProperties properties,
@@ -60,7 +62,12 @@ public class SimulationRunner implements SmartLifecycle {
     if (running) {
       return;
     }
-    simulation = Simulation.from(clock.instant(), properties, disruptions);
+    Instant startedAt = clock.instant();
+    simulation = Simulation.from(startedAt, properties, disruptions);
+    // Real time, from the same injected clock that set the simulation's starting instant. After
+    // that one reading the simulation keeps its own clock; this deadline is the only other place
+    // real time is consulted, and it decides nothing about what the trucks do.
+    stopAt = properties.runFor() == null ? null : startedAt.plus(properties.runFor());
     executor =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -107,6 +114,9 @@ public class SimulationRunner implements SmartLifecycle {
       }
       if (simulation.isFinished()) {
         log.info("Every truck has completed its route after {} ticks; stopping", report.tickNumber());
+        stop();
+      } else if (stopAt != null && !clock.instant().isBefore(stopAt)) {
+        log.info("Ran for {} after {} ticks; stopping", properties.runFor(), report.tickNumber());
         stop();
       }
     } catch (RuntimeException e) {

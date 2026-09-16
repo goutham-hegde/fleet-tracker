@@ -26,46 +26,9 @@ require kind "winget install Kubernetes.kind"
 DEPLOY_ONLY=false
 [ "${1:-}" = "--deploy" ] && DEPLOY_ONLY=true
 
-MONGO_URI="mongodb://localhost:37017"
-
-# Derived state, and why it is cleared on every full run.
-#
-# A stop that has been arrived at and departed from is terminal -- S10's rule, working exactly as
-# designed. So re-running the simulator over the same shipment ids produces a fleet in which every
-# marker already reads DELIVERED and nothing ever moves: a demonstration in which the platform is
-# correct and there is nothing to see. These six collections are all rebuilt from the stream.
-#
-# Reference data (assignments, itinerary, manifests, schemas) is NOT in this list. That is the
-# platform's input rather than its conclusions, it is what the seed scripts write, and dropping it
-# would leave the gateway dead-lettering every message it received.
-DERIVED_COLLECTIONS='["geofence.state","shipment.eta","shipment.position","exception.state","exceptions","position.history"]'
-
-reset_derived_state() {
-  # The tracking processor must not be running for this. position.history is a MongoDB time-series
-  # collection, and an insert into a missing collection silently creates an ordinary one -- no
-  # buckets, no compression, no error. Dropping it under a live consumer is precisely the failure
-  # S10 hit for real. Scaling the deployment to zero first makes the ordering explicit rather than
-  # hopeful; the deploy step below brings it back.
-  if kubectl get deployment/tracking-processor -n fleet >/dev/null 2>&1; then
-    log "Stopping the tracking processor before touching its time-series collection"
-    # KEDA owns this deployment's replica count, so it would restore the pod on its next loop. The
-    # pause annotation is how you tell it not to, and it is removed again after the drop.
-    kubectl annotate scaledobject/tracking-processor -n fleet \
-      autoscaling.keda.sh/paused-replicas="0" --overwrite >/dev/null 2>&1 || true
-    kubectl scale deployment/tracking-processor -n fleet --replicas=0 >/dev/null
-    kubectl wait --for=delete pod -l app.kubernetes.io/name=tracking-processor -n fleet --timeout=90s >/dev/null 2>&1 || true
-  fi
-
-  log "Clearing derived state"
-  mongosh "$MONGO_URI" --quiet --eval "
-    const d = db.getSiblingDB('fleet');
-    ${DERIVED_COLLECTIONS}.forEach(c => d.getCollection(c).drop());
-  " >/dev/null
-  ok "position history, geofence state, ETAs and incidents cleared"
-
-  kubectl annotate scaledobject/tracking-processor -n fleet \
-    autoscaling.keda.sh/paused-replicas- >/dev/null 2>&1 || true
-}
+# Derived state is cleared on every run, by reset_derived_state in lib.sh: re-running the simulator
+# over the same shipment ids otherwise produces a fleet in which every marker already reads
+# DELIVERED and nothing moves. The deploy step below brings the tracking processor back.
 
 if [ "$DEPLOY_ONLY" = false ]; then
   if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then

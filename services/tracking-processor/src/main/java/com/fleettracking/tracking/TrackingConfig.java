@@ -12,7 +12,9 @@ import com.fleettracking.tracking.geofence.GeofenceStateStore;
 import com.fleettracking.tracking.geofence.Geofencer;
 import com.fleettracking.reference.ItineraryStore;
 import com.fleettracking.tracking.consume.TrackingDeadLetters;
+import com.fleettracking.tracking.consume.StoredLatency;
 import com.fleettracking.tracking.store.PositionStore;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +41,10 @@ public class TrackingConfig {
 
   private static final Logger log = LoggerFactory.getLogger(TrackingConfig.class);
 
-  /** Wall-clock time, injected so a test can fix it. Used only for {@code updatedAt}. */
+  /**
+   * Wall-clock time, injected so a test can fix it. Used for {@code updatedAt} and for the stored
+   * latency, never for anything decided in event time.
+   */
   @Bean
   public Clock clock() {
     return Clock.systemUTC();
@@ -190,8 +195,13 @@ public class TrackingConfig {
       RecentEventIds recentEventIds,
       GeofenceService geofence,
       EtaService eta,
-      TrackingDeadLetters deadLetters) {
-    return new PositionConsumer(store, guard, recentEventIds, geofence, eta, deadLetters);
+      TrackingDeadLetters deadLetters,
+      Clock clock,
+      MeterRegistry meters) {
+    // Read by scripts/load-test.sh through /actuator/metrics on the probe port; see StoredLatency
+    // for why these are counters in buckets rather than a timer with percentiles.
+    return new PositionConsumer(
+        store, guard, recentEventIds, geofence, eta, deadLetters, clock, new StoredLatency(meters));
   }
 
   /**

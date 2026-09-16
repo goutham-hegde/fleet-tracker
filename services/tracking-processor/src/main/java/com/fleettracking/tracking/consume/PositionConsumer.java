@@ -6,6 +6,8 @@ import com.fleettracking.events.Topics;
 import com.fleettracking.tracking.eta.EtaService;
 import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.store.PositionStore;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -51,6 +53,16 @@ import tools.jackson.core.JacksonException;
  * message it never saw acknowledged. That can happen at any point in a perfectly healthy run, and
  * it is checked against a bounded set held in memory. Neither mechanism would catch the other's
  * case.
+ *
+ * <h2>How long a position takes to become durable</h2>
+ *
+ * <p>Every fresh measurement records, into {@link StoredLatency}, the time from the gateway
+ * receiving it to this service having stored it: history appended and current position advanced.
+ * That is the platform's end-to-end latency for its busiest path, and it is measured here because
+ * this is the only place both ends are known. Both readings come from wall clocks on the same
+ * machine, so there is no skew between them to correct for. It deliberately excludes geofencing
+ * and the estimate, which follow: those are conclusions drawn from a stored position, not part of
+ * storing it.
  */
 public class PositionConsumer {
 
@@ -62,6 +74,8 @@ public class PositionConsumer {
   private final GeofenceService geofence;
   private final EtaService eta;
   private final TrackingDeadLetters deadLetters;
+  private final Clock clock;
+  private final StoredLatency storedLatency;
 
   private final AtomicLong stored = new AtomicLong();
   private final AtomicLong duplicates = new AtomicLong();
@@ -73,13 +87,17 @@ public class PositionConsumer {
       RecentEventIds recentEventIds,
       GeofenceService geofence,
       EtaService eta,
-      TrackingDeadLetters deadLetters) {
+      TrackingDeadLetters deadLetters,
+      Clock clock,
+      StoredLatency storedLatency) {
     this.store = store;
     this.guard = guard;
     this.recentEventIds = recentEventIds;
     this.geofence = geofence;
     this.eta = eta;
     this.deadLetters = deadLetters;
+    this.clock = clock;
+    this.storedLatency = storedLatency;
   }
 
   /**
@@ -143,6 +161,12 @@ public class PositionConsumer {
 
     if (fresh) {
       stored.incrementAndGet();
+      // Only for a fresh write: a duplicate was timed when it was first stored. A record that a
+      // crash left unwritten and Kafka redelivered is fresh, and its long wait is counted, because
+      // that wait really was how long the position took to become durable.
+      if (event.receivedAt() != null) {
+        storedLatency.record(Duration.between(event.receivedAt(), clock.instant()));
+      }
       if (verify) {
         // The redelivered run has ended; everything after this in the partition is new.
         guard.firstNewRecordSeen(partition);
