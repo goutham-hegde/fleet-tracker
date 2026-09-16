@@ -3,8 +3,8 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-11 · **Current position:** M8 in progress, session S22 of 24 built;
-its public address awaits AWS account verification for CloudFront
+**Last updated:** 2026-09-16 · **Current position:** S23 of 24 done; M9 in progress, M8's public
+address still awaiting AWS account verification for CloudFront
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -16,9 +16,9 @@ M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
 M7 ██████████  2/2              complete
-M8 ████████░░  2/3 + S22 built  ← in progress: CloudFront awaits account verification
-M9 ░░░░░░░░░░  0/2
-               21/24 sessions
+M8 ████████░░  2/3 + S22 built  ← CloudFront awaits account verification
+M9 █████░░░░░  1/2              ← in progress: S23 done, S24 next
+               22/24 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -182,7 +182,7 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 **Capability:** commit → tested → built → deployed, with no manual step.
 
 - [x] **S18** — GitHub Actions CI + ghcr.io publishing
-- [ ] **S19** — ArgoCD pull-based GitOps
+- [x] **S19** — ArgoCD pull-based GitOps
 
 **Exit criteria**
 
@@ -227,13 +227,15 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 
 **Capability:** hard questions answered with numbers and documents instead of hand-waving.
 
-- [ ] **S23** — Load test + resilience (pod-kill, no event loss)
+- [x] **S23** — Load test + resilience (pod-kill, no event loss)
 - [ ] **S24** — ADRs, README, scripted demo
 
 **Exit criteria**
 
-- [ ] Throughput, lag, and p99 figures captured in `docs/`
-- [ ] Pod-kill test shows produced count **==** persisted count
+- [x] Throughput, lag, and p99 figures captured in `docs/` — [docs/performance.md](docs/performance.md)
+- [x] Pod-kill test shows produced count **==** persisted count — 148,349 == 148,349 over six
+  `kill -9`s including the broker and the database, nothing dead-lettered. One byte-identical
+  repeat, which is the documented trade rather than a loss
 - [ ] Four ADRs written, each naming the alternative rejected and why
 - [ ] A stranger can clone the repo and run the stack from the README alone
 
@@ -2419,10 +2421,96 @@ load-sensitive rather than loosened.
 
 ---
 
+## S23 — What it takes before it falls behind · 2026-09-16 · M9
+
+M9 asks for numbers instead of adjectives. S23 measures where this platform stops keeping up, why it
+stops there, and whether a crash costs a position. One script, `scripts/load-test.sh`, does both:
+a sweep of offered rates against the Kind cluster, and a run that kills pods with `kill -9` on a
+schedule and then compares the set of position events Kafka holds against the set MongoDB stored.
+The figures and the method are in [docs/performance.md](docs/performance.md).
+
+The headline: the gateway absorbs everything offered to it, MongoDB never becomes the constraint,
+and the tracking processor is the ceiling at about **585 positions a second on four pods** — 151.5
+on one, 384.0 on two. Six `kill -9`s, including the broker and the database, lost **nothing**.
+
+### Built
+
+- **A load generator out of the simulator itself**, run as a pod beside the platform, so every
+  message is a real feed's payload for a truck the gateway can resolve and every rule downstream
+  does its real work. `HttpMessageSink` gained workers: each has its own queue and a message goes
+  to the worker its routing key hashes to, so one device's messages still travel through one worker
+  in order — the property the single-worker sink existed to protect — while 128 workers together
+  offer enough load to find a ceiling. It also times every round trip into a `LatencyHistogram` and
+  reports rate and percentiles per interval.
+- **`StoredLatency` in the tracking processor**: monotonic counters, tagged by bucket, for the time
+  from the gateway receiving a position to it being stored. Read per pod before a step and after
+  its backlog has drained, so the figure covers every position the step offered, including those
+  that waited.
+- **`scripts/load-test.sh`**, with two modes. `sweep` steps through offered rates and records
+  twenty-one figures per step; `pod-kill` crashes pods on a schedule and compares produced against
+  persisted by event id. It pauses the demo simulator and the archiver for the run and, however it
+  exits, moves the archiver past everything the test produced before restarting it, so none of a
+  load test's gigabytes ever reaches S3 against ADR 0001's kilobytes.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| How load is generated | **The simulator, as a pod in the cluster**, with real payloads for resolvable trucks | A flat HTTP flooder replaying one captured body. It would measure the gateway's parser and nothing else: identity resolution, geofencing and the rules would all see the same truck at the same place |
+| Keeping order while going faster | **One queue per worker, the device's routing key choosing the worker** | A pool of workers sharing one queue, which reorders a device's messages in flight and would hand every feed the disorder the mobile feed is supposed to own alone |
+| How stored latency is measured | **Monotonic counters in fixed buckets**, differenced across a step and summed over pods | A Micrometer timer's percentiles, whose window only moves when something is recorded — a quiet pod reported the p99 of its last busy minute, 53 seconds, through a step in which nothing waited more than a few |
+| When the buckets are read | **After the backlog has drained**, not when the load stops | Reading at the end of the step, which would omit exactly the positions that waited longest — the ones the figure is about |
+| Autoscaling during a sweep | **Scale up as usual, scale-down held** for the run | Letting KEDA scale down mid-step: a pod that leaves takes its counters with it, and the percentiles then describe a sample rather than the step |
+| What a pod is worth | **Pinned-replica runs offered more than they can take**, so what they store is capacity | Reading capacity off the sweep. A consumer that is keeping up is measuring its offered rate, not its ceiling |
+| What the pod-kill run asserts | **Nothing lost, nothing unexpected, nothing dead-lettered** — duplicates reported as a figure | Asserting zero duplicates as well. That is a stronger claim than the design makes: ids are derived so a repeat is byte-identical, and publishing to Kafka before recording in Mongo makes a crash cost duplicates rather than losses, deliberately |
+| Where the test's traffic goes | **The archiver is stopped and moved past the test's offsets before restarting** | Letting it run: a load test would put gigabytes in S3 and flood the public view's indexer into a table provisioned for ten writes a second |
+
+### What surprised me
+
+**The first fleet never left the depot.** Every lane opens with an hour or two of loading at its
+origin, and the first sweeps ran at 5 simulated seconds a tick, at which that dwell outlasted a
+whole two-minute step. A parked truck is the cheapest message the tracking processor ever sees: no
+estimate to compute, a geofence it is already inside. Those sweeps measured the easy path and
+overstated capacity. At 30 simulated seconds a tick the fleet is moving within twenty seconds, and
+the same 250/s costs twice the stored p99 and half as much again per MongoDB write.
+
+**A percentile that could not go down.** The stored p99 was first a Micrometer timer inside each
+pod. Its window only advances when something is recorded, so a pod that had worked through a
+backlog and then gone quiet reported 53 seconds through an entire step in which nothing waited more
+than a few. The same sweep showed the second half of it: a pod the autoscaler removed mid-step took
+its counters with it. Counters that only go up fixed both — they cannot be stale, and they add
+across pods.
+
+**The load generator competes with the platform for the same laptop.** At two processor pods the
+generator delivered 2,011.7 messages a second and dropped 226; at four pods, same machine, same
+offered rate, it delivered 1,668.2 and dropped 35,517. That is also why the sweep's 2,000/s step
+stored *less* than its 1,000/s step, 510.6/s against 585.5/s. Nothing gained capacity — one laptop
+ran out of it. On this hardware the twelve partitions are nowhere near the binding limit.
+
+**A crash cost one duplicate, and the test was asserting the wrong thing.** The first pod-kill run
+lost nothing — 149,735 event ids produced, 149,735 persisted, none dead-lettered — but stored one
+document twice out of 149,736, and the script called that a failure. The cause is exact: a phone
+resent a fix 187 ms after the first copy, both reached Kafka at separate offsets with the same
+derived id, and the `kill -9` fourteen seconds earlier had rebalanced that partition onto a pod
+whose in-memory duplicate set was empty. Nothing below can catch it — `position.history` is a
+time-series collection, and those cannot carry a unique index. The two documents differ only in
+`receivedAt`. So the gate now asserts the invariant the platform actually offers, no loss, and
+reports duplicates as a number. Re-run from scratch afterwards it passed — 148,349 produced,
+148,349 persisted — and found exactly one repeat again, from the same cause, eighteen seconds after
+a kill. Two runs each finding it once is better evidence than one clean run would have been.
+
+---
+
 ## Next up
 
+**S24 closes M9 and the plan:** four ADRs, each naming the alternative it rejected; a README a
+stranger can clone and run start to finish; and a scripted demo. Two of M9's four exit criteria pass
+already — the figures are in [docs/performance.md](docs/performance.md) and the pod-kill run shows
+produced == persisted.
+
 **Finish S22 once AWS verifies the account for CloudFront.** A support case is open (Account and
-billing). When AWS confirms:
+billing), filed 2026-09-13; AWS replied on 2026-09-15 that it had gone to their Specialized Service
+Team, and it sits in *Pending Amazon Action*, which does not resolve on its own. When AWS confirms:
 
 1. `./scripts/infra-up.sh --auto-approve` **in a terminal of its own**. A distribution waits for global
    deployment, which takes several minutes. The apply resumes with the five resources that remain,

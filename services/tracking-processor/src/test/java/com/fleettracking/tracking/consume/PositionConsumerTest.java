@@ -10,7 +10,10 @@ import com.fleettracking.tracking.eta.EtaService;
 import com.fleettracking.tracking.geofence.GeofenceService;
 import com.fleettracking.tracking.geofence.ShipmentProgress;
 import com.fleettracking.tracking.store.PositionStore;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -38,9 +41,14 @@ class PositionConsumerTest {
   private RecentEventIds recentEventIds;
   private RecordingGeofence geofence;
   private RecordingEta eta;
+  private SimpleMeterRegistry meters;
   private PositionConsumer consumer;
 
   private static final TopicPartition PARTITION = new TopicPartition(Topics.POSITION, 4);
+
+  /** 350 ms after the gateway received the event {@code Positions.at(..., ZERO)} describes. */
+  private static final Clock STORED_AT =
+      Clock.fixed(Positions.T0.plusSeconds(2).plusMillis(350), ZoneOffset.UTC);
 
   @BeforeEach
   void setUp() {
@@ -50,7 +58,27 @@ class PositionConsumerTest {
     guard = new PartitionGuard(recentEventIds);
     geofence = new RecordingGeofence();
     eta = new RecordingEta();
-    consumer = new PositionConsumer(store, guard, recentEventIds, geofence, eta, deadLetters);
+    meters = new SimpleMeterRegistry();
+    consumer =
+        new PositionConsumer(
+            store, guard, recentEventIds, geofence, eta, deadLetters, STORED_AT, new StoredLatency(meters));
+  }
+
+  /**
+   * Receipt to stored, once per measurement written: 350 ms lands in the bucket up to 500 ms. The
+   * duplicate is not counted a second time: it was not stored a second time, and counting it would
+   * make every mobile backlog look fast.
+   */
+  @Test
+  void timesEachFreshWriteFromTheGatewaysReceipt() {
+    PositionEvent event = Positions.at("SHP-1", Duration.ZERO);
+
+    consumer.onPositionEvent(recordFor(event, 0));
+    consumer.onPositionEvent(recordFor(event, 1));
+
+    assertThat(meters.get(StoredLatency.METRIC).tag("le", "0.5").counter().count()).isEqualTo(1.0);
+    assertThat(meters.get(StoredLatency.METRIC).counters().stream().mapToDouble(c -> c.count()).sum())
+        .isEqualTo(1.0);
   }
 
   @Test

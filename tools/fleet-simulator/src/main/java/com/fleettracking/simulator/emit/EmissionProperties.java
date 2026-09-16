@@ -52,7 +52,7 @@ public record EmissionProperties(
     mobile = mobile == null ? new Mobile(null, null, null, null, null) : mobile;
     edi = edi == null ? new Edi(null, null, null, null, null, null) : edi;
     reefer = reefer == null ? new Reefer(null, null, null, null) : reefer;
-    http = http == null ? new Http(null, null, null, null) : http;
+    http = http == null ? new Http(null, null, null, null, null, null) : http;
   }
 
   /** True when the simulator should post its output to a gateway. */
@@ -169,13 +169,25 @@ public record EmissionProperties(
    * @param queueCapacity how many messages may wait to be sent, default 5000. When it fills, new
    *     messages are dropped rather than the fleet being made to wait — which is what a real
    *     device with a full buffer does
+   * @param workers requests in flight at once, default 1: about a hundred messages a second,
+   *     enough for any demonstration. Raised only to load-test the platform; each device still
+   *     sends through one worker, so no feed's order changes. See {@link HttpMessageSink}
+   * @param reportEvery how often to log the rate and latency of the interval just ended, default
+   *     unset (never). A load run sets it; a demo has nothing to learn from it
    */
-  public record Http(Boolean enabled, String baseUrl, Duration timeout, Integer queueCapacity) {
+  public record Http(
+      Boolean enabled,
+      String baseUrl,
+      Duration timeout,
+      Integer queueCapacity,
+      Integer workers,
+      Duration reportEvery) {
     public Http {
       enabled = enabled != null && enabled;
       baseUrl = baseUrl == null || baseUrl.isBlank() ? "http://localhost:18081" : baseUrl;
       timeout = timeout == null ? Duration.ofSeconds(5) : timeout;
       queueCapacity = queueCapacity == null || queueCapacity <= 0 ? 5000 : queueCapacity;
+      workers = workers == null || workers <= 0 ? 1 : workers;
     }
   }
 }

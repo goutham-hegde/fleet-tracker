@@ -154,9 +154,9 @@ class SimulationTest {
   @DisplayName("time scale converts real ticks into simulated ones")
   void timeScaleScalesTheTick() {
     SimulatorProperties realTime =
-        new SimulatorProperties(Duration.ofSeconds(1), 1.0, 4, 1L, true, false);
+        new SimulatorProperties(Duration.ofSeconds(1), 1.0, 4, 1L, true, false, null);
     SimulatorProperties compressed =
-        new SimulatorProperties(Duration.ofSeconds(1), 60.0, 4, 1L, true, false);
+        new SimulatorProperties(Duration.ofSeconds(1), 60.0, 4, 1L, true, false, null);
 
     assertThat(realTime.simulatedTickDelta()).isEqualTo(Duration.ofSeconds(1));
     assertThat(compressed.simulatedTickDelta()).isEqualTo(Duration.ofSeconds(60));

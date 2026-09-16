@@ -26,10 +26,20 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     demo populated indefinitely; false lets a test run to a definite end
  * @param autoStart whether to begin ticking on startup. Tests set this false and drive the
  *     simulation by hand
+ * @param runFor real time after which the simulation stops and the process exits, default unset
+ *     (run until every route is done, or for ever with {@code repeatRoutes}). A load run is a
+ *     Kubernetes Job and has to end by itself for its final counts to be logged; a demo never
+ *     sets it
  */
 @ConfigurationProperties(prefix = "fleet.simulator")
 public record SimulatorProperties(
-    Duration tickInterval, double timeScale, int trucks, long seed, boolean repeatRoutes, boolean autoStart) {
+    Duration tickInterval,
+    double timeScale,
+    int trucks,
+    long seed,
+    boolean repeatRoutes,
+    boolean autoStart,
+    Duration runFor) {
 
   public SimulatorProperties {
     if (tickInterval == null) {
@@ -43,6 +53,9 @@ public record SimulatorProperties(
     }
     if (tickInterval.isNegative() || tickInterval.isZero()) {
       throw new IllegalArgumentException("tickInterval must be positive: " + tickInterval);
+    }
+    if (runFor != null && !runFor.isPositive()) {
+      throw new IllegalArgumentException("runFor must be positive when set: " + runFor);
     }
   }
 
