@@ -114,7 +114,14 @@ if command -v gh >/dev/null 2>&1; then
   gh variable set AWS_ROLE_ARN --body "$role_arn" >/dev/null
   gh variable set AWS_TRUSTED_SUBJECT --body "$subject" >/dev/null
   gh variable set PUBLIC_SITE_BUCKET --body "$site_bucket" >/dev/null
-  gh variable set PUBLIC_DISTRIBUTION_ID --body "$distribution" >/dev/null
+  # Empty when the public view has no CloudFront in front of it. The variable is removed rather than
+  # set to nothing, so that publish-public reads an absent edge the same way whether it runs in CI
+  # or on a laptop, and `gh variable set` is never handed an empty body.
+  if [ -n "$distribution" ]; then
+    gh variable set PUBLIC_DISTRIBUTION_ID --body "$distribution" >/dev/null
+  else
+    gh variable delete PUBLIC_DISTRIBUTION_ID >/dev/null 2>&1 || true
+  fi
   ok "done"
 else
   warn "gh not found. Set AWS_ROLE_ARN, AWS_TRUSTED_SUBJECT, PUBLIC_SITE_BUCKET and PUBLIC_DISTRIBUTION_ID by hand under Settings > Secrets and variables > Actions > Variables"

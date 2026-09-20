@@ -36,7 +36,10 @@ ZIP="$REPO_ROOT/functions/public-view/target/public-view.zip"
 # live map uses, are volunteer-run servers whose usage policy excludes exactly this: a public site.
 BASEMAP="https://tiles.openfreemap.org/styles/liberty"
 
-if [ -z "${PUBLIC_SITE_BUCKET:-}" ] || [ -z "${PUBLIC_DISTRIBUTION_ID:-}" ]; then
+# Only the bucket is required. PUBLIC_DISTRIBUTION_ID is empty whenever the public view is served
+# from the lookup function's own URL rather than CloudFront (infra/cloud/variables.tf,
+# cloudfront_enabled), and an empty one means "no edge to refresh", not "not configured yet".
+if [ -z "${PUBLIC_SITE_BUCKET:-}" ]; then
   require terraform "winget install Hashicorp.Terraform"
   state_bucket="$(terraform -chdir="$REPO_ROOT/infra/bootstrap" output -raw state_bucket 2>/dev/null || true)"
   [ -n "$state_bucket" ] || die "No PUBLIC_SITE_BUCKET set and no bootstrap state to read it from. Run ./scripts/infra-up.sh first."
@@ -44,8 +47,9 @@ if [ -z "${PUBLIC_SITE_BUCKET:-}" ] || [ -z "${PUBLIC_DISTRIBUTION_ID:-}" ]; the
     -backend-config="bucket=$state_bucket" >/dev/null
   PUBLIC_SITE_BUCKET="$(terraform -chdir="$REPO_ROOT/infra/cloud" output -raw public_site_bucket 2>/dev/null || true)"
   PUBLIC_DISTRIBUTION_ID="$(terraform -chdir="$REPO_ROOT/infra/cloud" output -raw public_distribution_id 2>/dev/null || true)"
+  PUBLIC_URL="$(terraform -chdir="$REPO_ROOT/infra/cloud" output -raw public_url 2>/dev/null || true)"
   # Empty rather than failed when the stack predates S22 -- see infra-up.sh on `output -raw`.
-  [ -n "$PUBLIC_SITE_BUCKET" ] && [ -n "$PUBLIC_DISTRIBUTION_ID" ] \
+  [ -n "$PUBLIC_SITE_BUCKET" ] \
     || die "The cloud stack has no public view yet. Apply infra/cloud first (./scripts/infra-up.sh)."
 fi
 
@@ -95,10 +99,17 @@ aws s3 cp "$DIST/index.html" "$target/index.html" --only-show-errors \
 aws s3 sync "$DIST" "$target" --delete --size-only --only-show-errors
 ok "site uploaded"
 
-invalidation="$(aws cloudfront create-invalidation --distribution-id "$PUBLIC_DISTRIBUTION_ID" \
-  --paths "/index.html" "/" --query 'Invalidation.Id' --output text)"
-ok "edge refresh requested ($invalidation); live within a minute or two"
+if [ -n "${PUBLIC_DISTRIBUTION_ID:-}" ]; then
+  invalidation="$(aws cloudfront create-invalidation --distribution-id "$PUBLIC_DISTRIBUTION_ID" \
+    --paths "/index.html" "/" --query 'Invalidation.Id' --output text)"
+  ok "edge refresh requested ($invalidation); live within a minute or two"
 
-domain="$(aws cloudfront get-distribution --id "$PUBLIC_DISTRIBUTION_ID" \
-  --query 'Distribution.DomainName' --output text 2>/dev/null || true)"
-[ -n "$domain" ] && ok "https://$domain"
+  domain="$(aws cloudfront get-distribution --id "$PUBLIC_DISTRIBUTION_ID" \
+    --query 'Distribution.DomainName' --output text 2>/dev/null || true)"
+  [ -n "$domain" ] && ok "https://$domain"
+else
+  # No edge. The lookup function serves the page from this bucket and holds each file for a few
+  # minutes, so a fresh build reaches viewers once those environments expire rather than at once.
+  ok "no distribution: the lookup function serves the site; new files are live within ~5 minutes"
+  [ -n "${PUBLIC_URL:-}" ] && ok "$PUBLIC_URL"
+fi

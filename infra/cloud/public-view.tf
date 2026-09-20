@@ -160,6 +160,16 @@ data "aws_iam_policy_document" "public_lookup" {
     actions   = ["dynamodb:Scan", "dynamodb:Query"]
     resources = [aws_dynamodb_table.public.arn]
   }
+  # Read the page, when this function is the one serving it. Objects only, not the bucket: the
+  # function fetches keys the request names and never lists what is there.
+  dynamic "statement" {
+    for_each = var.cloudfront_enabled ? [] : [1]
+    content {
+      sid       = "ReadTheSite"
+      actions   = ["s3:GetObject"]
+      resources = ["${aws_s3_bucket.public_site.arn}/*"]
+    }
+  }
   statement {
     sid       = "Log"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -199,13 +209,22 @@ resource "aws_lambda_function" "public" {
   filename = local.public_view_zip
 
   environment {
-    variables = {
-      TABLE_NAME = aws_dynamodb_table.public.name
-      # Stop the JIT at its first tier. The full optimizing compiler pays off over minutes of
-      # running; a function that lives for one request mostly pays for starting it. This is AWS's
-      # own advice for Java cold starts.
-      JAVA_TOOL_OPTIONS = "-XX:+TieredCompilation -XX:TieredStopAtLevel=1"
-    }
+    # SITE_BUCKET is merged in rather than set to "", so it appears only on the function that has a
+    # use for it. Its presence is what tells the lookup to serve the page as well as answer
+    # questions; behind CloudFront it is absent and the function answers /api/* alone. The indexer
+    # never has it, and does not get an empty one it would have to ignore.
+    variables = merge(
+      {
+        TABLE_NAME = aws_dynamodb_table.public.name
+        # Stop the JIT at its first tier. The full optimizing compiler pays off over minutes of
+        # running; a function that lives for one request mostly pays for starting it. This is AWS's
+        # own advice for Java cold starts.
+        JAVA_TOOL_OPTIONS = "-XX:+TieredCompilation -XX:TieredStopAtLevel=1"
+      },
+      each.key == "lookup" && !var.cloudfront_enabled
+      ? { SITE_BUCKET = aws_s3_bucket.public_site.bucket }
+      : {}
+    )
   }
 
   logging_config {
@@ -263,32 +282,52 @@ resource "aws_s3_bucket_notification" "archive" {
 # The front door
 # ------------------------------------------------------------------------------------------------
 
-# The lookup's URL requires AWS signatures. Nothing on the internet can call it directly; CloudFront
-# signs its own requests (origin access control, below) and the permissions after it admit exactly
-# this distribution.
+# Behind CloudFront the lookup's URL requires AWS signatures, and nothing on the internet can call
+# it directly: CloudFront signs its own requests (origin access control, below) and the permissions
+# after it admit exactly this distribution.
+#
+# Without CloudFront the URL is the front door, so it is open. That is a real exposure and it is
+# bounded on purpose: the function's role can read one DynamoDB table and one bucket and write
+# nothing anywhere (see public_lookup below), the table is provisioned rather than on-demand so a
+# flood throttles instead of billing, and the account's concurrency ceiling of 10 caps how much of
+# it can run at once.
 resource "aws_lambda_function_url" "lookup" {
   function_name      = aws_lambda_function.public["lookup"].function_name
-  authorization_type = "AWS_IAM"
+  authorization_type = var.cloudfront_enabled ? "AWS_IAM" : "NONE"
 }
 
 # BOTH of these are needed, and the second is the one that gets forgotten. Since October 2025 a new
 # function URL checks lambda:InvokeFunction as well as lambda:InvokeFunctionUrl; with only the first,
 # CloudFront gets a 403 that looks exactly like a signing problem.
 resource "aws_lambda_permission" "lookup_url_from_cloudfront" {
+  count                  = var.cloudfront_enabled ? 1 : 0
   statement_id           = "CloudFrontInvokeFunctionUrl"
   action                 = "lambda:InvokeFunctionUrl"
   function_name          = aws_lambda_function.public["lookup"].function_name
   principal              = "cloudfront.amazonaws.com"
-  source_arn             = aws_cloudfront_distribution.public.arn
+  source_arn             = aws_cloudfront_distribution.public[0].arn
   function_url_auth_type = "AWS_IAM"
 }
 
 resource "aws_lambda_permission" "lookup_invoke_from_cloudfront" {
+  count         = var.cloudfront_enabled ? 1 : 0
   statement_id  = "CloudFrontInvokeFunction"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.public["lookup"].function_name
   principal     = "cloudfront.amazonaws.com"
-  source_arn    = aws_cloudfront_distribution.public.arn
+  source_arn    = aws_cloudfront_distribution.public[0].arn
+}
+
+# The open door's counterpart: anybody may call the function URL. `*` as the principal is what an
+# unauthenticated URL means, and the auth type on the statement keeps the grant to the URL -- the
+# function itself still cannot be invoked by anyone through the API.
+resource "aws_lambda_permission" "lookup_url_public" {
+  count                  = var.cloudfront_enabled ? 0 : 1
+  statement_id           = "PublicInvokeFunctionUrl"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.public["lookup"].function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
 }
 
 resource "aws_s3_bucket" "public_site" {
@@ -320,18 +359,37 @@ data "aws_iam_policy_document" "public_site" {
   # CloudFront may read objects, on behalf of this distribution only. Not a public policy -- the
   # principal is a service, narrowed to one distribution -- which is why the public access block
   # above can stay fully on.
-  statement {
-    sid       = "CloudFrontReadsTheSite"
-    actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.public_site.arn}/*"]
-    principals {
-      type        = "Service"
-      identifiers = ["cloudfront.amazonaws.com"]
+  dynamic "statement" {
+    for_each = var.cloudfront_enabled ? [1] : []
+    content {
+      sid       = "CloudFrontReadsTheSite"
+      actions   = ["s3:GetObject"]
+      resources = ["${aws_s3_bucket.public_site.arn}/*"]
+      principals {
+        type        = "Service"
+        identifiers = ["cloudfront.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "AWS:SourceArn"
+        values   = [aws_cloudfront_distribution.public[0].arn]
+      }
     }
-    condition {
-      test     = "StringEquals"
-      variable = "AWS:SourceArn"
-      values   = [aws_cloudfront_distribution.public.arn]
+  }
+
+  # Without CloudFront the lookup function reads the site itself, so the same permission goes to its
+  # role instead. Still not a public policy: the principal is one role in this account, and the
+  # bucket stays blocked to everyone else.
+  dynamic "statement" {
+    for_each = var.cloudfront_enabled ? [] : [1]
+    content {
+      sid       = "TheLookupReadsTheSite"
+      actions   = ["s3:GetObject"]
+      resources = ["${aws_s3_bucket.public_site.arn}/*"]
+      principals {
+        type        = "AWS"
+        identifiers = [aws_iam_role.public["lookup"].arn]
+      }
     }
   }
 
@@ -359,6 +417,7 @@ resource "aws_s3_bucket_policy" "public_site" {
 }
 
 resource "aws_cloudfront_origin_access_control" "public_site" {
+  count                             = var.cloudfront_enabled ? 1 : 0
   name                              = "${local.public_name}-site"
   description                       = "CloudFront signs its reads of the site bucket."
   origin_access_control_origin_type = "s3"
@@ -367,6 +426,7 @@ resource "aws_cloudfront_origin_access_control" "public_site" {
 }
 
 resource "aws_cloudfront_origin_access_control" "public_lookup" {
+  count                             = var.cloudfront_enabled ? 1 : 0
   name                              = "${local.public_name}-lookup"
   description                       = "CloudFront signs its calls to the lookup function URL."
   origin_access_control_origin_type = "lambda"
@@ -381,6 +441,7 @@ resource "aws_cloudfront_origin_access_control" "public_lookup" {
 # fresh invocation. No headers and no cookies are forwarded; in particular not Host, which the
 # function URL checks against its own name when verifying CloudFront's signature.
 resource "aws_cloudfront_cache_policy" "public_api" {
+  count       = var.cloudfront_enabled ? 1 : 0
   name        = "${local.public_name}-api"
   comment     = "Path plus ?open, honouring the lookup's max-age"
   min_ttl     = 0
@@ -407,14 +468,17 @@ resource "aws_cloudfront_cache_policy" "public_api" {
 
 # AWS-managed policies, looked up by name rather than pasted in as ids.
 data "aws_cloudfront_cache_policy" "caching_optimized" {
-  name = "Managed-CachingOptimized"
+  count = var.cloudfront_enabled ? 1 : 0
+  name  = "Managed-CachingOptimized"
 }
 
 data "aws_cloudfront_response_headers_policy" "security_headers" {
-  name = "Managed-SecurityHeadersPolicy"
+  count = var.cloudfront_enabled ? 1 : 0
+  name  = "Managed-SecurityHeadersPolicy"
 }
 
 resource "aws_cloudfront_distribution" "public" {
+  count               = var.cloudfront_enabled ? 1 : 0
   enabled             = true
   comment             = "fleet-tracker public view"
   default_root_object = "index.html"
@@ -429,14 +493,14 @@ resource "aws_cloudfront_distribution" "public" {
   origin {
     origin_id                = "site"
     domain_name              = aws_s3_bucket.public_site.bucket_regional_domain_name
-    origin_access_control_id = aws_cloudfront_origin_access_control.public_site.id
+    origin_access_control_id = aws_cloudfront_origin_access_control.public_site[0].id
   }
 
   origin {
     origin_id = "lookup"
     # The function URL is https://<id>.lambda-url.<region>.on.aws/ and an origin wants the host.
     domain_name              = trimsuffix(trimprefix(aws_lambda_function_url.lookup.function_url, "https://"), "/")
-    origin_access_control_id = aws_cloudfront_origin_access_control.public_lookup.id
+    origin_access_control_id = aws_cloudfront_origin_access_control.public_lookup[0].id
     custom_origin_config {
       http_port              = 80
       https_port             = 443
@@ -452,8 +516,8 @@ resource "aws_cloudfront_distribution" "public" {
     viewer_protocol_policy     = "redirect-to-https"
     allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]
-    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
-    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers.id
+    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized[0].id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers[0].id
     compress                   = true
   }
 
@@ -465,8 +529,8 @@ resource "aws_cloudfront_distribution" "public" {
     viewer_protocol_policy     = "redirect-to-https"
     allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]
-    cache_policy_id            = aws_cloudfront_cache_policy.public_api.id
-    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers.id
+    cache_policy_id            = aws_cloudfront_cache_policy.public_api[0].id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers[0].id
     compress                   = true
   }
 
@@ -502,11 +566,15 @@ data "aws_iam_policy_document" "github_actions_public" {
     resources = [aws_s3_bucket.public_site.arn]
   }
   # Tell the edge that index.html has changed. The first 1,000 invalidation paths a month are free,
-  # and a merge uses one.
-  statement {
-    sid       = "RefreshEdge"
-    actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
-    resources = [aws_cloudfront_distribution.public.arn]
+  # and a merge uses one. Without a distribution there is no edge to tell, and publish-public skips
+  # the step rather than being refused it.
+  dynamic "statement" {
+    for_each = var.cloudfront_enabled ? [1] : []
+    content {
+      sid       = "RefreshEdge"
+      actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+      resources = [aws_cloudfront_distribution.public[0].arn]
+    }
   }
   # Replace the two functions' code, and wait until the replacement is live. Not their
   # configuration, not their role, not their permissions: those are Terraform's.

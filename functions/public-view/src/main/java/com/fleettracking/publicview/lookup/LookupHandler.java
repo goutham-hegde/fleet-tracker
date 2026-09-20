@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import software.amazon.awssdk.services.s3.S3Client;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -39,12 +40,18 @@ import tools.jackson.databind.ObjectMapper;
  * long as they watch, which a function billed by the invocation cannot be and a table updated once an
  * hour has no use for.
  *
- * <h2>Reached only through CloudFront</h2>
+ * <h2>Two front doors, and which one is in use</h2>
  *
- * <p>The function has a URL, and the URL requires AWS signatures. CloudFront signs its requests
- * with origin access control, and the function's resource policy admits that one distribution and
- * nothing else. A request to the bare URL is refused before this code runs. That is what makes the
- * cache in front of it a guarantee rather than a hope: nobody can go around it.
+ * <p>ADR 0003's front door is CloudFront: the function's URL requires AWS signatures, CloudFront
+ * signs its requests with origin access control, and the resource policy admits that one
+ * distribution and nothing else. A request to the bare URL is refused before this code runs, which
+ * is what makes the cache in front of it a guarantee rather than a hope.
+ *
+ * <p>That door is shut until AWS verifies the account for CloudFront, so there is a second: the
+ * function URL, open, answering for both origins. {@code SITE_BUCKET} is what says which door is in
+ * use -- set, and this function also serves the page ({@link Site}); unset, and it answers only
+ * {@code /api/*} because something in front is serving the rest. Nothing else in this class changes
+ * between the two.
  *
  * <h2>Two caches, for two different floods</h2>
  *
@@ -68,27 +75,62 @@ public final class LookupHandler implements RequestStreamHandler {
   private record Snapshot(
       Instant takenAt, Map<String, ShipmentFacts> fleet, List<Watermark> watermarks) {}
 
-  /** What goes back to the function URL: its documented response shape. */
-  record Response(int statusCode, Map<String, String> headers, String body) {}
+  /**
+   * What goes back to the function URL: its documented response shape. A body is base64 only when
+   * it is a file that is not text -- see {@link Site}.
+   */
+  record Response(int statusCode, Map<String, String> headers, String body, boolean base64) {
+    Response(int statusCode, Map<String, String> headers, String body) {
+      this(statusCode, headers, body, false);
+    }
+  }
 
   private final PublicTable table;
   private final PublicAssembler assembler;
   private final Clock clock;
+  private final Site site;
   private final ObjectMapper mapper = EventJson.mapper();
   private volatile Snapshot snapshot;
 
-  /** What the Lambda runtime calls: everything from the function's environment. */
+  /**
+   * What the Lambda runtime calls: everything from the function's environment.
+   *
+   * <p>{@code SITE_BUCKET} is optional, and its absence is the difference between the two front
+   * doors. Behind CloudFront the distribution serves the page from the bucket itself and this
+   * function answers only {@code /api/*}. On a bare function URL there is nothing in front, so the
+   * function serves the page too.
+   */
   public LookupHandler() {
     this(
         new PublicTable(Clients.dynamo(), Clients.env("TABLE_NAME"), Clock.systemUTC()),
         Plans.packaged(),
-        Clock.systemUTC());
+        Clock.systemUTC(),
+        siteFromEnvironment());
   }
 
+  /** Behind CloudFront: questions only, because the distribution serves the page. */
   public LookupHandler(PublicTable table, Plans plans, Clock clock) {
+    this(table, plans, clock, (Site) null);
+  }
+
+  /** On a bare function URL: the page as well, read from the site bucket. */
+  public LookupHandler(
+      PublicTable table, Plans plans, Clock clock, S3Client s3, String siteBucket) {
+    this(table, plans, clock, new Site(s3, siteBucket, clock));
+  }
+
+  private LookupHandler(PublicTable table, Plans plans, Clock clock, Site site) {
     this.table = table;
     this.assembler = new PublicAssembler(plans, clock);
     this.clock = clock;
+    this.site = site;
+  }
+
+  private static Site siteFromEnvironment() {
+    String bucket = System.getenv("SITE_BUCKET");
+    return bucket == null || bucket.isBlank()
+        ? null
+        : new Site(Clients.s3(), bucket, Clock.systemUTC());
   }
 
   @Override
@@ -104,7 +146,7 @@ public final class LookupHandler implements RequestStreamHandler {
     out.put("statusCode", response.statusCode());
     out.put("headers", response.headers());
     out.put("body", response.body());
-    out.put("isBase64Encoded", false);
+    out.put("isBase64Encoded", response.base64());
     mapper.writeValue(output, out);
   }
 
@@ -136,6 +178,11 @@ public final class LookupHandler implements RequestStreamHandler {
       }
       if (path.equals("/api/stream")) {
         return problem(404, "the public view is an archive and has no live stream");
+      }
+      // Anything that is not a question is a request for the page. A path under /api/ that got this
+      // far is a question nobody answers, and stays a JSON 404 rather than becoming HTML.
+      if (site != null && !path.equals("/api") && !path.startsWith("/api/")) {
+        return site.serve(path);
       }
       return problem(404, "no such path");
     } catch (RuntimeException e) {

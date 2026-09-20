@@ -32,16 +32,25 @@ output "cluster_issuer_bucket" {
 
 # The public view (S22). The first is the address to open; the next two become repository variables
 # the publish-public job reads, set by scripts/infra-up.sh like AWS_ROLE_ARN.
+#
+# The address is whichever front door is built: CloudFront's name when there is a distribution, the
+# lookup function's own URL when there is not. Both are HTTPS with a certificate that came free.
 output "public_url" {
-  value = "https://${aws_cloudfront_distribution.public.domain_name}"
+  value = (
+    var.cloudfront_enabled
+    ? "https://${aws_cloudfront_distribution.public[0].domain_name}"
+    : trimsuffix(aws_lambda_function_url.lookup.function_url, "/")
+  )
 }
 
 output "public_site_bucket" {
   value = aws_s3_bucket.public_site.bucket
 }
 
+# Empty without CloudFront, which publish-public reads as "no edge to refresh". Terraform's
+# `output -raw` exits 0 with empty stdout for this, so callers test emptiness -- see infra-up.sh.
 output "public_distribution_id" {
-  value = aws_cloudfront_distribution.public.id
+  value = var.cloudfront_enabled ? aws_cloudfront_distribution.public[0].id : ""
 }
 
 output "public_table" {

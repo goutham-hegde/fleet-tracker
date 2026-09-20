@@ -24,6 +24,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +64,7 @@ class PublicViewIT {
 
   static final String BUCKET = "fleet-archive-it";
   static final String TABLE = "fleet-tracker-public-it";
+  static final String SITE = "fleet-tracker-site-it";
   static final String HYD = "SHP-HYD-0002";
   static final String DEL = "SHP-DEL-0001";
 
@@ -83,6 +85,9 @@ class PublicViewIT {
   static S3Client s3;
   static IndexHandler indexer;
   static LookupHandler lookup;
+
+  /** The same lookup with a site bucket: what runs when the function URL is the front door. */
+  static LookupHandler siteLookup;
 
   @BeforeAll
   static void clientsTableAndBucket() {
@@ -118,10 +123,12 @@ class PublicViewIT {
                     AttributeDefinition.builder().attributeName(PublicTable.SK).attributeType(ScalarAttributeType.S).build())
                 .provisionedThroughput(ProvisionedThroughput.builder().readCapacityUnits(10L).writeCapacityUnits(10L).build()));
     s3.createBucket(b -> b.bucket(BUCKET));
+    s3.createBucket(b -> b.bucket(SITE));
 
     PublicTable table = new PublicTable(dynamo, TABLE, Clock.systemUTC());
     indexer = new IndexHandler(s3, table);
     lookup = new LookupHandler(table, Plans.packaged(), Clock.systemUTC());
+    siteLookup = new LookupHandler(table, Plans.packaged(), Clock.systemUTC(), s3, SITE);
   }
 
   @Test
@@ -218,7 +225,82 @@ class PublicViewIT {
     assertThat(ok.path("isBase64Encoded").asBoolean()).isFalse();
   }
 
+  /**
+   * The second front door: with no CloudFront, the lookup serves the dashboard's own files too.
+   *
+   * <p>The switch is the site bucket and nothing else, so the same table and the same assembler
+   * answer either way. That is asserted from both sides: this handler serves the page, and the
+   * handler built without a bucket still refuses to.
+   */
+  @Test
+  void theFunctionServesTheSiteWhenItIsTheFrontDoor() throws IOException {
+    // Any test that could pass against the wrong destination must assert the destination.
+    assertThat(s3.serviceClientConfiguration().endpointOverride())
+        .get()
+        .hasToString("http://" + S3.getHost() + ":" + S3.getMappedPort(9090));
+
+    String page = "<!doctype html><title>fleet tracker</title>";
+    putSite("index.html", "text/html; charset=utf-8", "public, max-age=60", page.getBytes(StandardCharsets.UTF_8));
+    putSite("assets/index-abc123.js", "application/javascript", "public, max-age=31536000, immutable",
+        "export const a = 1;".getBytes(StandardCharsets.UTF_8));
+    byte[] png = {(byte) 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+    putSite("favicon.png", "image/png", null, png);
+
+    // The root is the page, with the cache-control the publish script put on the object rather than
+    // one invented here: one place decides how long a file may be reused.
+    JsonNode root = invokeOn(siteLookup, "GET", "/");
+    assertThat(root.path("statusCode").asInt()).isEqualTo(200);
+    assertThat(root.path("headers").path("content-type").asString()).isEqualTo("text/html; charset=utf-8");
+    assertThat(root.path("headers").path("cache-control").asString()).isEqualTo("public, max-age=60");
+    assertThat(root.path("isBase64Encoded").asBoolean()).isFalse();
+    assertThat(root.path("body").asString()).contains("fleet tracker");
+
+    // A hashed asset keeps its year.
+    JsonNode asset = invokeOn(siteLookup, "GET", "/assets/index-abc123.js");
+    assertThat(asset.path("statusCode").asInt()).isEqualTo(200);
+    assertThat(asset.path("headers").path("content-type").asString()).startsWith("application/javascript");
+    assertThat(asset.path("headers").path("cache-control").asString())
+        .isEqualTo("public, max-age=31536000, immutable");
+
+    // Anything that is not text goes back base64, or the browser is handed a corrupted file.
+    JsonNode icon = invokeOn(siteLookup, "GET", "/favicon.png");
+    assertThat(icon.path("isBase64Encoded").asBoolean()).isTrue();
+    assertThat(Base64.getDecoder().decode(icon.path("body").asString())).isEqualTo(png);
+
+    // A path with no extension is a route in a single-page app, so it renders the app.
+    JsonNode deep = invokeOn(siteLookup, "GET", "/shipments/" + HYD);
+    assertThat(deep.path("statusCode").asInt()).isEqualTo(200);
+    assertThat(deep.path("body").asString()).contains("fleet tracker");
+
+    // A path that looks like a file and is not there stays a 404. Answering HTML to a request for
+    // JavaScript is a syntax error in the console instead of a missing file in the network tab.
+    assertThat(invokeOn(siteLookup, "GET", "/assets/gone-0000.js").path("statusCode").asInt()).isEqualTo(404);
+
+    // Keys come from the request path, so the path is checked rather than trusted.
+    assertThat(invokeOn(siteLookup, "GET", "/../secrets").path("statusCode").asInt()).isEqualTo(404);
+
+    // A question stays a question: /api/ never falls through to the page.
+    JsonNode api = invokeOn(siteLookup, "GET", "/api/nope");
+    assertThat(api.path("statusCode").asInt()).isEqualTo(404);
+    assertThat(api.path("headers").path("content-type").asString()).isEqualTo("application/json");
+
+    // And the CloudFront-mode handler serves no page at all: the bucket is the whole switch.
+    assertThat(invoke("GET", "/", null).path("statusCode").asInt()).isEqualTo(404);
+  }
+
   // -----------------------------------------------------------------------------------------
+
+  /** A file as scripts/public-publish.sh uploads it: content type and cache-control included. */
+  private static void putSite(String key, String contentType, String cacheControl, byte[] body) {
+    s3.putObject(
+        p -> {
+          p.bucket(SITE).key(key).contentType(contentType);
+          if (cacheControl != null) {
+            p.cacheControl(cacheControl);
+          }
+        },
+        RequestBody.fromBytes(body));
+  }
 
   private static final AtomicLong WRITTEN = new AtomicLong(1_757_570_000_000L);
 
@@ -267,6 +349,12 @@ class PublicViewIT {
 
   /** A function URL request (payload format 2.0), and the response as the runtime returns it. */
   private static JsonNode invoke(String method, String pathAndQuery, String unused) throws IOException {
+    return invokeOn(lookup, method, pathAndQuery);
+  }
+
+  /** The same request against a chosen handler, so both front doors can be exercised. */
+  private static JsonNode invokeOn(LookupHandler handler, String method, String pathAndQuery)
+      throws IOException {
     String path = pathAndQuery.contains("?") ? pathAndQuery.substring(0, pathAndQuery.indexOf('?')) : pathAndQuery;
     Map<String, Object> query = new LinkedHashMap<>();
     if (pathAndQuery.contains("?")) {
@@ -285,7 +373,7 @@ class PublicViewIT {
     request.put("requestContext", Map.of("http", Map.of("method", method, "path", path)));
 
     ByteArrayOutputStream out = new ByteArrayOutputStream();
-    lookup.handleRequest(new ByteArrayInputStream(EventJson.mapper().writeValueAsBytes(request)), out, null);
+    handler.handleRequest(new ByteArrayInputStream(EventJson.mapper().writeValueAsBytes(request)), out, null);
     return EventJson.mapper().readTree(out.toByteArray());
   }
 
