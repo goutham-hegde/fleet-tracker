@@ -15,6 +15,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /**
  * The dashboard's own files, served by the lookup function.
@@ -150,13 +151,34 @@ final class Site {
     }
   }
 
-  /** Null when the object is not there. Anything else propagates: it is not a 404. */
+  /**
+   * Null when the object is not there. Anything else propagates: it is not a 404.
+   *
+   * <p><strong>A miss arrives as 403, not 404.</strong> S3 will not confirm that a key does not
+   * exist to a caller who may not list the bucket, so without {@code s3:ListBucket} it answers
+   * AccessDenied for a key that is simply absent. This function deliberately has no
+   * {@code s3:ListBucket} — it never lists, it fetches keys the request names — so that is the
+   * normal shape of a miss here and has to be read as one. Granting ListBucket to get a tidier 404
+   * would widen the function's reach over the bucket to buy nothing.
+   *
+   * <p>The cost of reading it this way is that a genuine permissions mistake looks exactly like an
+   * empty bucket: every page would 404 rather than fail loudly. Hence the log line — it is the only
+   * thing that tells those two apart, and it is worth having when the page is unexpectedly blank.
+   */
   private Response fetch(String key) {
     ResponseBytes<GetObjectResponse> object;
     try {
       object = s3.getObjectAsBytes(GetObjectRequest.builder().bucket(bucket).key(key).build());
     } catch (NoSuchKeyException e) {
       return null;
+    } catch (S3Exception e) {
+      if (e.statusCode() == 403 || e.statusCode() == 404) {
+        System.out.println(
+            "site: " + key + " -> " + e.statusCode() + ", treated as missing"
+                + " (403 is what S3 says for an absent key without s3:ListBucket)");
+        return null;
+      }
+      throw e;
     }
     byte[] bytes = object.asByteArray();
     String contentType = contentTypeFor(key, object.response().contentType());
