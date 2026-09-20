@@ -62,7 +62,7 @@ if [ "$SITE_ONLY" = false ]; then
   for fn in "${FUNCTIONS[@]}"; do
     log "Deploying $fn"
     aws lambda update-function-code --function-name "$fn" \
-      --zip-file "fileb://$ZIP" --query 'CodeSha256' --output text >/dev/null
+      --zip-file "fileb://$(native "$ZIP")" --query 'CodeSha256' --output text >/dev/null
     # An update is asynchronous: the call returns while the new code is still being prepared, and
     # a second update to the same function in that window is refused. Waiting also means "published"
     # at the end of this script is true rather than pending.
@@ -89,14 +89,14 @@ case "$bundle" in *tiles.openfreemap.org*) ;; *) die "The archive build is not u
 
 target="s3://$PUBLIC_SITE_BUCKET"
 log "Uploading to $target"
-aws s3 cp "$DIST/assets" "$target/assets" --recursive --only-show-errors \
+aws s3 cp "$(native "$DIST/assets")" "$target/assets" --recursive --only-show-errors \
   --cache-control "public, max-age=31536000, immutable"
-aws s3 sync "$DIST" "$target" --only-show-errors --exclude "assets/*" --exclude index.html \
+aws s3 sync "$(native "$DIST")" "$target" --only-show-errors --exclude "assets/*" --exclude index.html \
   --cache-control "public, max-age=3600"
-aws s3 cp "$DIST/index.html" "$target/index.html" --only-show-errors \
+aws s3 cp "$(native "$DIST/index.html")" "$target/index.html" --only-show-errors \
   --cache-control "public, max-age=60" --content-type "text/html; charset=utf-8"
 # --size-only so this pass only deletes: every file it would compare was uploaded seconds ago.
-aws s3 sync "$DIST" "$target" --delete --size-only --only-show-errors
+aws s3 sync "$(native "$DIST")" "$target" --delete --size-only --only-show-errors
 ok "site uploaded"
 
 if [ -n "${PUBLIC_DISTRIBUTION_ID:-}" ]; then
