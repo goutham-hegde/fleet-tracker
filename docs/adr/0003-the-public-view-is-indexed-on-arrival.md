@@ -1,6 +1,6 @@
 # ADR 0003 — The public view is indexed on arrival
 
-**Status:** accepted · 2026-09-11 · S22
+**Status:** accepted · 2026-09-11 · S22 · [addendum](#addendum--the-front-door-changed-2026-09-21)
 
 ## Context
 
@@ -83,3 +83,59 @@ browser  -> CloudFront -+- /*     -> private bucket: the dashboard, built in arc
 - **Serve the public view straight from the Lambda function URL, with no CloudFront.** It is HTTPS and
   free. But with no cache in front, every page view is an invocation and the function is open to
   anybody, and it is the design that makes cost grow with visitors again.
+
+## Addendum — the front door changed (2026-09-21)
+
+**The last alternative rejected above is what is deployed.** Not because the reasoning changed, but
+because CloudFront turned out not to be available to this account.
+
+Creating a distribution is refused with `AccessDenied: Your account must be verified before you can
+add new CloudFront resources`. A support case was filed on 2026-09-13; AWS replied on 2026-09-15 that
+it had gone to a "Specialized Service Team" and left it in *Pending Amazon Action*, which does not
+resolve on its own. Six days later nothing had moved, and the Support API is not available on this
+account's plan, so even the case's state can only be read in a browser. The verification has no date
+on it.
+
+So the public view is served from the lookup function's own URL, and `cloudfront_enabled` in
+`infra/cloud/variables.tf` — default `false` — is the whole switch.
+
+### What survives, and what does not
+
+The title of this ADR still holds, and that is the point of taking this route rather than the first
+alternative. **An archive file is still read exactly once, when it lands.** S3's request count still
+grows with what the laptop produced and never with who is looking, which is the cost this account's
+one-cent alert actually watches. The table, the indexer, the fold and the lookup's answers are
+untouched.
+
+What is given up is the edge:
+
+- **Every page view is an invocation**, and so is every file within it. A page is roughly a dozen
+  requests where CloudFront would have served eleven of them from a cache.
+- **The function URL is open to the internet.** Under the original design nothing could reach the
+  function except one distribution, and that was a guarantee rather than a hope. It is now a door.
+- **Cache-control is advice rather than enforcement.** The headers are unchanged and browsers honour
+  them, but there is no shared cache making a second viewer free.
+
+It stays at $0.00 because Lambda's million invocations a month do not expire, the account's
+concurrency ceiling of ten caps the rate at which the open door can be walked through, the lookup's
+role can read one table and one bucket and write nothing anywhere, and the table's provisioned
+capacity throttles rather than bills.
+
+### The cache moved inside the function
+
+Each execution environment holds the files it has fetched for five minutes, bounded by bytes rather
+than entries because a build's files are so unequal in size. A warm function serves the page from
+memory, so S3 sees roughly one GET per file per environment per five minutes instead of one per view.
+
+This is deliberately a weaker claim than CloudFront's. A cold environment refetches, several can run
+at once, and nothing coordinates them. It is the difference between a few hundred S3 GETs a day and a
+few thousand — worth having, and not the same thing as an edge.
+
+### Going back
+
+Set `cloudfront_enabled = true` and apply. The distribution, the two origin access controls and the
+API cache policy are recreated, the function URL returns to `AWS_IAM`, the site bucket grants reads
+to the distribution instead of the Lambda's role, and `SITE_BUCKET` disappears from the function's
+environment — which is what makes the code stop serving the page, with no code change. The two
+Terraform destroys this addendum caused (the access controls and the cache policy) cost nothing and
+recreate in seconds.
