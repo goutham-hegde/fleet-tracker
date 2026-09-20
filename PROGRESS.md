@@ -2720,6 +2720,9 @@ variable that exists and is empty, and the CI job's `vars.X != ''` test cannot t
 | **The live public URL in a browser** | **Renders.** 86 tile responses all 200, 147 markers, 0 console errors, 147 shipments / 320 open incidents / archived through 2026-09-17 on screen. **The archive build had never been loaded by a browser in any session before this one** |
 | The detail path | Clicking a truck fetched `/api/shipments/SHP-HYD-0002` (200) and drew its plan, geofences and travelled line, with the manifest panel saying it is not part of the public archive view |
 | `SiteTest` (new) | 6 unit tests, no mocking library: a 403 is a miss, a `NoSuchKey` is a miss, a repeat is not re-fetched, a 500 still propagates, a `..` path never reaches S3 |
+| `./mvnw verify` | **Green across the whole reactor**, all eleven modules, no test failures (`tracking-processor` 2:44, `exception-service` 2:32) |
+| Dashboard `npm run lint` / `npm test` | Clean; 39 tests pass |
+| `kubectl kustomize deploy/overlays/local`, `terraform fmt -recursive` | Both clean |
 | The CloudFront block itself | Not re-probed directly; the function-URL refusal makes the point more cheaply, and the case is still *Pending Amazon Action* |
 
 ### Left open
