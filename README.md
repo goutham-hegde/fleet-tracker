@@ -6,11 +6,12 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** all 24 planned sessions built. M0–M7 and M9 complete. M8 has no public address: this
-> AWS account has not been verified, and an unverified account may expose neither a CloudFront
-> distribution nor a public Lambda function URL. Everything behind that address is deployed and
-> verified working. See **[PROGRESS.md](PROGRESS.md)** for the build log, the decisions and what is
-> next, and **[docs/adr/](docs/adr/)** for the design decisions.
+> **Status:** all 24 planned sessions built. M0–M7 and M9 complete; M8 is 3 of 5 criteria, with a
+> teardown and a month-end bill left. The public archive view is live at
+> **<https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws>** — on a Lambda function
+> URL rather than CloudFront, which this account may not create until AWS verifies it. See
+> **[PROGRESS.md](PROGRESS.md)** for the build log, the decisions and what is next, and
+> **[docs/adr/](docs/adr/)** for the design decisions.
 
 ## Why this exists
 
@@ -1036,14 +1037,14 @@ The live map cannot be public: its API runs on the laptop, which has no public a
 address shows the archive instead, and says so on screen. The design is recorded in
 [ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md).
 
-**There is no public address yet, and not for want of building one.** AWS holds new accounts behind a
-manual verification before they may expose anything publicly. A CloudFront distribution is refused
-outright; a public Lambda function URL — built as a fallback, applied, and behind
-`cloudfront_enabled = false` — is refused too, with a 403 at the URL layer and no invocation reaching
-the function. The gate is on being publicly reachable, not on a particular service. Everything behind
-it is deployed and checked: the lookup answers from the real table and serves the dashboard's files,
-and the archive build renders in a browser against it. See the
-[addendum to ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md#addendum--the-front-door-changed-and-the-account-refused-that-too-2026-09-21).
+**It is live at
+<https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws>** — but not through
+CloudFront. This account may not create a distribution until AWS verifies it, a request that has sat
+with AWS Support since 2026-09-13, so the lookup function serves the dashboard's files from its own
+function URL instead and CloudFront waits behind `cloudfront_enabled`, default off. That trades away
+the edge cache: every page view is an invocation, against a free million a month that does not
+expire. The reasoning, and what it costs, are in the
+[addendum to ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md#addendum--the-front-door-changed-2026-09-21).
 
 ```
 archiver -> S3 archive/ --(file finished)--> index function --(folds it once)--> DynamoDB table

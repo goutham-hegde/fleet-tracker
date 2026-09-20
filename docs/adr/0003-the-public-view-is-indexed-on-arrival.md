@@ -1,6 +1,6 @@
 # ADR 0003 — The public view is indexed on arrival
 
-**Status:** accepted · 2026-09-11 · S22 · [addendum](#addendum--the-front-door-changed-and-the-account-refused-that-too-2026-09-21)
+**Status:** accepted · 2026-09-11 · S22 · [addendum](#addendum--the-front-door-changed-2026-09-21)
 
 ## Context
 
@@ -84,72 +84,78 @@ browser  -> CloudFront -+- /*     -> private bucket: the dashboard, built in arc
   free. But with no cache in front, every page view is an invocation and the function is open to
   anybody, and it is the design that makes cost grow with visitors again.
 
-## Addendum — the front door changed, and the account refused that too (2026-09-21)
+## Addendum — the front door changed (2026-09-21)
 
-**The last alternative rejected above was built, applied, and is still refused.** The blocker is not
-this design. It is the account.
+**The last alternative rejected above is what is deployed, and the public view is live at**
+`https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws`.
 
-### What was blocked, and what was tried
-
+Not because the reasoning above changed, but because CloudFront turned out not to be available.
 Creating a distribution is refused with `AccessDenied: Your account must be verified before you can
-add new CloudFront resources`. A support case was filed on 2026-09-13; AWS replied on 2026-09-15 that
-it had gone to a "Specialized Service Team" and left it in *Pending Amazon Action*, which does not
-resolve on its own. Eight days later nothing had moved, and the Support API is not available on this
-account's plan, so even the case's state can only be read in a browser.
+add new CloudFront resources`. A support case was filed on 2026-09-13; AWS replied on 2026-09-15
+that it had gone to a "Specialized Service Team" and left it in *Pending Amazon Action*, which does
+not resolve on its own. Eight days later nothing had moved, and the Support API needs a paid support
+plan, so even the case's state can only be read in a browser.
 
-So the front door was rebuilt on a Lambda function URL, which is HTTPS with a certificate of its own:
-the lookup function serves the dashboard's files as well as answering its questions, and
-`cloudfront_enabled` in `infra/cloud/variables.tf` — default `false` — picks between the two.
+A Lambda function URL is HTTPS with a certificate of its own, so the lookup function serves the
+dashboard's files as well as answering its questions, reading them from the same S3 site bucket
+CloudFront would have read. `cloudfront_enabled` in `infra/cloud/variables.tf` — default `false` —
+picks between the two.
 
-### What happened when it was applied
+### What survives, and what does not
 
-**The public function URL is refused as well.** With `AuthType: NONE` and AWS's own documented
-public-access policy in place (`lambda:InvokeFunctionUrl`, principal `*`, conditioned on
-`lambda:FunctionUrlAuthType = NONE`), every request returns:
+The title of this ADR still holds, and that is the point of taking this route rather than the first
+alternative. **An archive file is still read exactly once, when it lands.** S3's request count still
+grows with what the laptop produced and never with who is looking, which is the cost this account's
+one-cent alert actually watches. The table, the indexer, the fold and the lookup's answers are
+untouched.
 
-```
-HTTP/1.1 403 Forbidden
-x-amzn-ErrorType: AccessDeniedException
-{"Message":"Forbidden. For troubleshooting Function URL authorization issues, see: ..."}
-```
+What is given up is the edge:
 
-CloudWatch shows **no invocation** for any of those requests: the refusal happens at the URL layer,
-before the function runs. It persisted for half an hour after the change, so it is not propagation.
+- **Every page view is an invocation**, and so is every file within it. A page is roughly a dozen
+  requests where CloudFront would have served eleven from a cache.
+- **The function URL is open to the internet.** Under the original design nothing could reach the
+  function except one distribution, and that was a guarantee rather than a hope. It is now a door.
+- **Cache-control is advice rather than enforcement.** The headers are unchanged and browsers honour
+  them, but there is no shared cache making a second viewer free.
 
-The conclusion is that the verification gate is not about CloudFront. It is about **exposing a public
-endpoint at all**, and a public Lambda function URL is one. That makes the fallback a fallback in
-name only: it moves the block, it does not clear it.
+It stays at $0.00 because Lambda's million invocations a month do not expire, the account's
+concurrency ceiling of ten caps the rate at which the open door can be walked through, the lookup's
+role can read one table and one bucket and write nothing anywhere, and the table's provisioned
+capacity throttles rather than bills.
 
-### What is nonetheless verified
+### The cache moved inside the function
 
-The design works; only the door is shut. Invoked directly, the deployed function does both jobs
-correctly:
+Each execution environment holds the files it has fetched for five minutes, bounded by bytes rather
+than entries because a build's files are so unequal in size. **Misses are remembered too** — a miss
+costs an S3 GET exactly as a hit does, and this ADR names a stream of distinct uncached URLs as the
+one cost a public page cannot control. CloudFront answered that by caching 404s for a minute; with
+nothing in front, this cache is what does it.
 
-- `/api/meta` returns 147 tracked shipments, 373 open incidents, archived through
-  `2026-09-17T09:44:35Z`, read from the real table.
-- `/` returns `index.html` as `text/html; charset=utf-8` with the `max-age=60` the publish script put
-  on the object, and `/assets/index-*.js` comes back as JavaScript with its year-long immutable
-  header — the cache rules carried from S3 rather than restated in code.
+This is deliberately a weaker claim than CloudFront's. A cold environment refetches, several can run
+at once, and nothing coordinates them. It is the difference between a few hundred S3 GETs a day and
+a few thousand — worth having, and not the same thing as an edge.
 
-Served locally from the same uploaded bundle against that same deployed function, **the archive build
-renders in a browser**: 93 tile responses all 200, 147 markers, no console errors, the incident list
-and the "archived through" stamp populated, and clicking a truck fetches `/api/shipments/{id}` and
-draws its plan, geofences and travelled line — with the manifest panel correctly saying it is not
-part of the public archive view. That had never been checked before; it is the one thing a green
-build genuinely cannot tell you.
+### Two things that cost a day between them
 
-### What this costs, and what it does not
+Both are recorded here because both are invisible until they happen, and both looked like something
+else.
 
-The ADR's title still holds and is untouched: **an archive file is still read exactly once, when it
-lands.** S3's request count still grows with what the laptop produced and never with who is looking.
-The table, the indexer, the fold and the lookup's answers are unchanged.
+**A public function URL needs two permissions, not one.** `AuthType: NONE` plus
+`lambda:InvokeFunctionUrl` — AWS's own headline example — produces **403 on every request**, with no
+invocation and nothing in the function's log. It is indistinguishable from the URL being closed, or
+from the account being barred from public endpoints, which is what it was first taken for. Since
+October 2025 a function URL also checks `lambda:InvokeFunction`, and that statement is conditioned
+on `lambda:InvokedViaFunctionUrl` rather than `lambda:FunctionUrlAuthType` — passing the latter is
+rejected outright, which makes the wrong guess look like a dead end. The same trap is already
+documented in `public-view.tf` for the CloudFront pair; it applies to `NONE` just as much.
 
-What the fallback gives up — every page view an invocation, a URL open to the internet rather than
-reachable by one distribution alone, cache-control as advice rather than enforcement — is currently
-**latent rather than real**, because no public traffic reaches it. It becomes real the moment AWS
-verifies the account, and at that point CloudFront becomes available too, which is the better answer.
-So the open function URL should be treated as a decision to revisit on the day verification lands,
-not as the settled end state.
+**Without `s3:ListBucket`, S3 answers 403 for a key that is not there.** It will not confirm the
+absence of an object to a caller that may not list. The lookup deliberately has no `ListBucket` — it
+fetches keys the request names and never lists — so a miss arrives as `AccessDenied`, not
+`NoSuchKey`, and the first deployment answered 503 to every missing path. `Site` reads 403 and 404
+alike as "missing" and logs when it does, because a genuine permissions mistake arrives in exactly
+the same shape and would otherwise present as an empty site rather than a failure. Granting
+`ListBucket` for a tidier 404 would widen the function's reach over the bucket to buy nothing.
 
 ### Going back
 

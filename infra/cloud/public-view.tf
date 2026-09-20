@@ -319,8 +319,7 @@ resource "aws_lambda_permission" "lookup_invoke_from_cloudfront" {
 }
 
 # The open door's counterpart: anybody may call the function URL. `*` as the principal is what an
-# unauthenticated URL means, and the auth type on the statement keeps the grant to the URL -- the
-# function itself still cannot be invoked by anyone through the API.
+# unauthenticated URL means, and the auth type on the statement keeps the grant to the URL.
 resource "aws_lambda_permission" "lookup_url_public" {
   count                  = var.cloudfront_enabled ? 0 : 1
   statement_id           = "PublicInvokeFunctionUrl"
@@ -328,6 +327,24 @@ resource "aws_lambda_permission" "lookup_url_public" {
   function_name          = aws_lambda_function.public["lookup"].function_name
   principal              = "*"
   function_url_auth_type = "NONE"
+}
+
+# And the second half, which is the half that gets forgotten -- the same trap as the CloudFront pair
+# above, and it applies to AuthType NONE just as much. With only the permission above, EVERY request
+# is a 403 that is indistinguishable from the URL being closed: no invocation, nothing in the
+# function's log, and a resource policy that matches AWS's own documented example except for this.
+#
+# `invoked_via_function_url` is what keeps the grant to URL traffic. Without it, "the page is public"
+# would also mean "anybody may invoke this function through the Lambda API", which is a different and
+# much larger statement. Note it is NOT `function_url_auth_type` -- that argument exists only for
+# lambda:InvokeFunctionUrl, and passing it here is rejected.
+resource "aws_lambda_permission" "lookup_invoke_public" {
+  count                    = var.cloudfront_enabled ? 0 : 1
+  statement_id             = "PublicInvokeFunction"
+  action                   = "lambda:InvokeFunction"
+  function_name            = aws_lambda_function.public["lookup"].function_name
+  principal                = "*"
+  invoked_via_function_url = true
 }
 
 resource "aws_s3_bucket" "public_site" {
