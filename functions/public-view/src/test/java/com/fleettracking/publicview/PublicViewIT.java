@@ -276,6 +276,14 @@ class PublicViewIT {
     // JavaScript is a syntax error in the console instead of a missing file in the network tab.
     assertThat(invokeOn(siteLookup, "GET", "/assets/gone-0000.js").path("statusCode").asInt()).isEqualTo(404);
 
+    // And that miss is remembered, which is what stops a stream of made-up paths costing an S3 GET
+    // each -- the job CloudFront's cached 404s did. Uploading the file now does not change the
+    // answer, because the miss is still inside its five minutes.
+    putSite("assets/gone-0000.js", "application/javascript", null, "late".getBytes(StandardCharsets.UTF_8));
+    assertThat(invokeOn(siteLookup, "GET", "/assets/gone-0000.js").path("statusCode").asInt())
+        .as("a remembered miss is not re-fetched")
+        .isEqualTo(404);
+
     // Keys come from the request path, so the path is checked rather than trusted.
     assertThat(invokeOn(siteLookup, "GET", "/../secrets").path("statusCode").asInt()).isEqualTo(404);
 
