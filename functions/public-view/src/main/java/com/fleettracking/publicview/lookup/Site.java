@@ -45,6 +45,11 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
  * memory, so in practice the bound is never reached; it exists so that a misconfiguration pointing
  * at a bucket full of something else cannot exhaust the heap.
  *
+ * <p><strong>Misses are cached as well as hits.</strong> A miss costs an S3 GET exactly as a hit
+ * does, and ADR 0003 names a stream of distinct uncached URLs as the one cost a public page cannot
+ * control. CloudFront answered that by caching 404s for a minute; with nothing in front, this cache
+ * is what does it. A remembered miss holds a null response and occupies no bytes.
+ *
  * <h2>What it will not serve</h2>
  *
  * <p>Keys are taken from the request path, so the path is checked rather than trusted: no {@code ..}
@@ -70,6 +75,7 @@ final class Site {
 
   private static final Map<String, String> CONTENT_TYPES = contentTypes();
 
+  /** A fetched file, or -- when {@code response} is null -- the fact that there is no such file. */
   private record Cached(Instant storedAt, Response response) {}
 
   private final S3Client s3;
@@ -93,41 +99,55 @@ final class Site {
     if (key == null) {
       return notFound();
     }
-    Cached hit = cache.get(key);
     Instant now = clock.instant();
-    if (hit != null && Duration.between(hit.storedAt(), now).compareTo(TTL) < 0) {
-      return hit.response();
+    Cached hit = fresh(key, now);
+    if (hit != null) {
+      return hit.response() == null ? missAnswer(key, now) : hit.response();
     }
     Response fetched = fetch(key);
     if (fetched == null) {
-      // A miss that could be a route rather than a file: the app's own router should decide.
-      return key.contains(".") ? notFound() : indexOr404(now);
+      // Misses are remembered too. CloudFront would have cached a 404 for a minute, which is what
+      // stopped a stream of made-up paths from becoming a request each; with no edge in front, this
+      // cache is the only thing doing that, and a miss costs an S3 GET exactly like a hit does.
+      remember(key, null, now);
+      return missAnswer(key, now);
     }
     remember(key, fetched, now);
     return fetched;
   }
 
-  /** index.html under another name, so a deep link renders the app instead of an error. */
-  private Response indexOr404(Instant now) {
-    Cached hit = cache.get("index.html");
-    if (hit != null && Duration.between(hit.storedAt(), now).compareTo(TTL) < 0) {
-      return hit.response();
-    }
-    Response index = fetch("index.html");
-    if (index == null) {
-      return notFound();
-    }
-    remember("index.html", index, now);
-    return index;
+  /** What a key that is not in the bucket gets: the app's router decides, or an honest 404. */
+  private Response missAnswer(String key, Instant now) {
+    return key.contains(".") ? notFound() : indexOr404(now);
   }
 
+  /** The entry for this key if it was stored within {@link #TTL}, null otherwise. */
+  private Cached fresh(String key, Instant now) {
+    Cached hit = cache.get(key);
+    return hit != null && Duration.between(hit.storedAt(), now).compareTo(TTL) < 0 ? hit : null;
+  }
+
+  /** index.html under another name, so a deep link renders the app instead of an error. */
+  private Response indexOr404(Instant now) {
+    Cached hit = fresh("index.html", now);
+    if (hit != null) {
+      return hit.response() == null ? notFound() : hit.response();
+    }
+    Response index = fetch("index.html");
+    remember("index.html", index, now);
+    return index == null ? notFound() : index;
+  }
+
+  /** A null response records a miss: worth remembering, and it occupies no bytes. */
   private void remember(String key, Response response, Instant now) {
     if (cachedBytes.get() > MAX_CACHE_BYTES) {
       cache.clear();
       cachedBytes.set(0);
     }
     cache.put(key, new Cached(now, response));
-    cachedBytes.addAndGet(response.body().length());
+    if (response != null) {
+      cachedBytes.addAndGet(response.body().length());
+    }
   }
 
   /** Null when the object is not there. Anything else propagates: it is not a 404. */

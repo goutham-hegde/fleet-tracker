@@ -2694,7 +2694,7 @@ variable that exists and is empty, and the CI job's `vars.X != ''` test cannot t
 | `terraform validate` on `infra/cloud` | Success |
 | `./scripts/infra-up.sh --plan` | **3 to add, 3 to change, 3 to destroy.** Adds the public invoke permission, the site bucket policy and the CI role policy; changes the function URL's auth from `AWS_IAM` to `NONE`, the lookup's environment and its role policy; destroys the two origin access controls and the API cache policy, all free and all recreated when the flag flips back |
 | The plan touches the indexer | **No** — `SITE_BUCKET` is merged in for the lookup only, so the index function is left alone |
-| The address the plan would produce | `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws` |
+| The address the plan produced | `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws` — it exists and is refused; see the row below |
 | `PublicViewIT` | 3 tests green. The new one serves the page at `/`, a hashed asset with its year-long cache header, a PNG returned base64, a deep link falling back to `index.html`, a missing `.js` staying 404, a `..` path refused, `/api/nope` staying JSON — and the CloudFront-mode handler still refusing to serve a page at all |
 | `aws sts get-caller-identity` | `user/goutham-admin`, not `:root` |
 | Account contact details | Complete — so an incomplete profile is not why verification stalled |
