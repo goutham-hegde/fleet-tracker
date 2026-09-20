@@ -1,6 +1,6 @@
 # ADR 0003 — The public view is indexed on arrival
 
-**Status:** accepted · 2026-09-11 · S22 · [addendum](#addendum--the-front-door-changed-2026-09-21)
+**Status:** accepted · 2026-09-11 · S22 · [addendum](#addendum--the-front-door-changed-and-the-account-refused-that-too-2026-09-21)
 
 ## Context
 
@@ -84,58 +84,76 @@ browser  -> CloudFront -+- /*     -> private bucket: the dashboard, built in arc
   free. But with no cache in front, every page view is an invocation and the function is open to
   anybody, and it is the design that makes cost grow with visitors again.
 
-## Addendum — the front door changed (2026-09-21)
+## Addendum — the front door changed, and the account refused that too (2026-09-21)
 
-**The last alternative rejected above is what is deployed.** Not because the reasoning changed, but
-because CloudFront turned out not to be available to this account.
+**The last alternative rejected above was built, applied, and is still refused.** The blocker is not
+this design. It is the account.
+
+### What was blocked, and what was tried
 
 Creating a distribution is refused with `AccessDenied: Your account must be verified before you can
 add new CloudFront resources`. A support case was filed on 2026-09-13; AWS replied on 2026-09-15 that
 it had gone to a "Specialized Service Team" and left it in *Pending Amazon Action*, which does not
-resolve on its own. Six days later nothing had moved, and the Support API is not available on this
-account's plan, so even the case's state can only be read in a browser. The verification has no date
-on it.
+resolve on its own. Eight days later nothing had moved, and the Support API is not available on this
+account's plan, so even the case's state can only be read in a browser.
 
-So the public view is served from the lookup function's own URL, and `cloudfront_enabled` in
-`infra/cloud/variables.tf` — default `false` — is the whole switch.
+So the front door was rebuilt on a Lambda function URL, which is HTTPS with a certificate of its own:
+the lookup function serves the dashboard's files as well as answering its questions, and
+`cloudfront_enabled` in `infra/cloud/variables.tf` — default `false` — picks between the two.
 
-### What survives, and what does not
+### What happened when it was applied
 
-The title of this ADR still holds, and that is the point of taking this route rather than the first
-alternative. **An archive file is still read exactly once, when it lands.** S3's request count still
-grows with what the laptop produced and never with who is looking, which is the cost this account's
-one-cent alert actually watches. The table, the indexer, the fold and the lookup's answers are
-untouched.
+**The public function URL is refused as well.** With `AuthType: NONE` and AWS's own documented
+public-access policy in place (`lambda:InvokeFunctionUrl`, principal `*`, conditioned on
+`lambda:FunctionUrlAuthType = NONE`), every request returns:
 
-What is given up is the edge:
+```
+HTTP/1.1 403 Forbidden
+x-amzn-ErrorType: AccessDeniedException
+{"Message":"Forbidden. For troubleshooting Function URL authorization issues, see: ..."}
+```
 
-- **Every page view is an invocation**, and so is every file within it. A page is roughly a dozen
-  requests where CloudFront would have served eleven of them from a cache.
-- **The function URL is open to the internet.** Under the original design nothing could reach the
-  function except one distribution, and that was a guarantee rather than a hope. It is now a door.
-- **Cache-control is advice rather than enforcement.** The headers are unchanged and browsers honour
-  them, but there is no shared cache making a second viewer free.
+CloudWatch shows **no invocation** for any of those requests: the refusal happens at the URL layer,
+before the function runs. It persisted for half an hour after the change, so it is not propagation.
 
-It stays at $0.00 because Lambda's million invocations a month do not expire, the account's
-concurrency ceiling of ten caps the rate at which the open door can be walked through, the lookup's
-role can read one table and one bucket and write nothing anywhere, and the table's provisioned
-capacity throttles rather than bills.
+The conclusion is that the verification gate is not about CloudFront. It is about **exposing a public
+endpoint at all**, and a public Lambda function URL is one. That makes the fallback a fallback in
+name only: it moves the block, it does not clear it.
 
-### The cache moved inside the function
+### What is nonetheless verified
 
-Each execution environment holds the files it has fetched for five minutes, bounded by bytes rather
-than entries because a build's files are so unequal in size. A warm function serves the page from
-memory, so S3 sees roughly one GET per file per environment per five minutes instead of one per view.
+The design works; only the door is shut. Invoked directly, the deployed function does both jobs
+correctly:
 
-This is deliberately a weaker claim than CloudFront's. A cold environment refetches, several can run
-at once, and nothing coordinates them. It is the difference between a few hundred S3 GETs a day and a
-few thousand — worth having, and not the same thing as an edge.
+- `/api/meta` returns 147 tracked shipments, 373 open incidents, archived through
+  `2026-09-17T09:44:35Z`, read from the real table.
+- `/` returns `index.html` as `text/html; charset=utf-8` with the `max-age=60` the publish script put
+  on the object, and `/assets/index-*.js` comes back as JavaScript with its year-long immutable
+  header — the cache rules carried from S3 rather than restated in code.
+
+Served locally from the same uploaded bundle against that same deployed function, **the archive build
+renders in a browser**: 93 tile responses all 200, 147 markers, no console errors, the incident list
+and the "archived through" stamp populated, and clicking a truck fetches `/api/shipments/{id}` and
+draws its plan, geofences and travelled line — with the manifest panel correctly saying it is not
+part of the public archive view. That had never been checked before; it is the one thing a green
+build genuinely cannot tell you.
+
+### What this costs, and what it does not
+
+The ADR's title still holds and is untouched: **an archive file is still read exactly once, when it
+lands.** S3's request count still grows with what the laptop produced and never with who is looking.
+The table, the indexer, the fold and the lookup's answers are unchanged.
+
+What the fallback gives up — every page view an invocation, a URL open to the internet rather than
+reachable by one distribution alone, cache-control as advice rather than enforcement — is currently
+**latent rather than real**, because no public traffic reaches it. It becomes real the moment AWS
+verifies the account, and at that point CloudFront becomes available too, which is the better answer.
+So the open function URL should be treated as a decision to revisit on the day verification lands,
+not as the settled end state.
 
 ### Going back
 
 Set `cloudfront_enabled = true` and apply. The distribution, the two origin access controls and the
 API cache policy are recreated, the function URL returns to `AWS_IAM`, the site bucket grants reads
 to the distribution instead of the Lambda's role, and `SITE_BUCKET` disappears from the function's
-environment — which is what makes the code stop serving the page, with no code change. The two
-Terraform destroys this addendum caused (the access controls and the cache policy) cost nothing and
-recreate in seconds.
+environment — which is what makes the code stop serving the page, with no code change.
