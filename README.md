@@ -6,9 +6,11 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** all 24 planned sessions built. M0–M7 and M9 complete; M8's public address waits on
-> AWS enabling CloudFront for the account. See **[PROGRESS.md](PROGRESS.md)** for the build log,
-> the decisions and what is next, and **[docs/adr/](docs/adr/)** for the design decisions.
+> **Status:** all 24 planned sessions built. M0–M7 and M9 complete. M8 has no public address: this
+> AWS account has not been verified, and an unverified account may expose neither a CloudFront
+> distribution nor a public Lambda function URL. Everything behind that address is deployed and
+> verified working. See **[PROGRESS.md](PROGRESS.md)** for the build log, the decisions and what is
+> next, and **[docs/adr/](docs/adr/)** for the design decisions.
 
 ## Why this exists
 
@@ -932,7 +934,7 @@ object ArgoCD manages. Both cases here are in `deploy/argocd/application.yaml`:
 
 The platform runs on the laptop. AWS holds only what can exist there at **$0.00** under the
 always-free allowances: IAM, a budget, a few megabytes of S3, a small DynamoDB table, and Lambda
-behind CloudFront. Nothing that could run Kafka or MongoDB is free, so there is no cloud cluster and no
+(behind CloudFront, once the account may have one). Nothing that could run Kafka or MongoDB is free, so there is no cloud cluster and no
 cloud overlay. The reasoning and the prices are in
 [ADR 0001](docs/adr/0001-aws-at-zero-dollars.md).
 
@@ -941,7 +943,7 @@ Two Terraform stacks under `infra/`:
 | Stack | Holds | State |
 |---|---|---|
 | `infra/bootstrap` | A zero-spend budget, then the state bucket, which depends on it | A local file (gitignored). A stack cannot keep its state in a bucket it is about to create |
-| `infra/cloud` | Everything else: the GitHub OIDC provider and the CI role (S20); the cluster's OIDC provider, the archive bucket and two pod roles (S21); the public view's table, two functions, site bucket and CloudFront distribution (S22) | `s3://fleet-tracker-tfstate-<account>/cloud/`, locked with a lock file in the bucket |
+| `infra/cloud` | Everything else: the GitHub OIDC provider and the CI role (S20); the cluster's OIDC provider, the archive bucket and two pod roles (S21); the public view's table, two functions and site bucket, with CloudFront behind `cloudfront_enabled` until the account is verified (S22) | `s3://fleet-tracker-tfstate-<account>/cloud/`, locked with a lock file in the bucket |
 
 **The budget counts gross cost.** On AWS's credit-based plans, usage is paid from credits first, so
 the bill reads $0.00 while real resources are being consumed. The budget excludes credits and emails
@@ -1034,11 +1036,20 @@ The live map cannot be public: its API runs on the laptop, which has no public a
 address shows the archive instead, and says so on screen. The design is recorded in
 [ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md).
 
+**There is no public address yet, and not for want of building one.** AWS holds new accounts behind a
+manual verification before they may expose anything publicly. A CloudFront distribution is refused
+outright; a public Lambda function URL — built as a fallback, applied, and behind
+`cloudfront_enabled = false` — is refused too, with a 403 at the URL layer and no invocation reaching
+the function. The gate is on being publicly reachable, not on a particular service. Everything behind
+it is deployed and checked: the lookup answers from the real table and serves the dashboard's files,
+and the archive build renders in a browser against it. See the
+[addendum to ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md#addendum--the-front-door-changed-and-the-account-refused-that-too-2026-09-21).
+
 ```
 archiver -> S3 archive/ --(file finished)--> index function --(folds it once)--> DynamoDB table
                                                                                      ^
 browser -> CloudFront -+- /*     -> site bucket: the dashboard, built in archive mode  |
-                       +- /api/* -> lookup function (function URL) --------------------+
+       (when allowed)  +- /api/* -> lookup function (function URL) --------------------+
 ```
 
 - **The index function** (`functions/public-view`) is woken by S3 each time the archiver finishes a
@@ -1047,8 +1058,10 @@ browser -> CloudFront -+- /*     -> site bucket: the dashboard, built in archive
   indexing a file twice or out of order leaves the same table. Estimates are left out, because a
   forecast from a run that may have ended days ago is not information.
 - **The lookup function** answers the dashboard's own four `GET`s in the live API's shapes. Plans
-  come from the committed lane catalogue. It is reachable only through CloudFront, which signs its
-  requests; the function URL refuses anything else.
+  come from the committed lane catalogue. Behind CloudFront it is reachable only through the
+  distribution, which signs its requests. Without CloudFront it serves the dashboard's files as well,
+  from the same site bucket, caching them in its own memory for five minutes; `SITE_BUCKET` in its
+  environment is what decides which of the two it is doing.
 - **The dashboard** is built a second way, with `VITE_ARCHIVE_MODE=true`: no live stream, a
   one-minute poll, "archived through" in place of "live", and OpenFreeMap's vector basemap, which
   needs no key.
