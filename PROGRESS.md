@@ -4,8 +4,9 @@ Running log of how this platform gets built — what was decided, what was rejec
 surprised me along the way.
 
 **Last updated:** 2026-09-21 · **Current position:** S24 of 24 done; M9 complete. M8's public
-address no longer waits on AWS: after eight days of a support case that did not move, the front door
-was rebuilt on a Lambda function URL, with CloudFront behind a flag for when verification comes
+address is blocked by AWS account verification, and a second front door proved it: a public Lambda
+function URL is refused the same way CloudFront is. The gate is on public endpoints, not on one
+service, so it is the account and not the design that is unfinished
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -17,7 +18,7 @@ M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
 M7 ██████████  2/2              complete
-M8 ████████░░  2/3 + S22 built  ← CloudFront awaits account verification
+M8 ████████░░  2/3 + S22 built  ← no public address: the account is unverified
 M9 ██████████  2/2              complete
                23/24 sessions
 ```
@@ -207,9 +208,9 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
 
 - [x] **S20** — AWS account, budget alert, Terraform base, GitHub OIDC
 - [x] **S21** — Archiver writing partitioned events to S3
-- [ ] **S22** — CloudFront + Lambda public demo — *built; the front door is now the lookup
-  function's own URL, since AWS never verified the account for CloudFront. Waiting only on the
-  apply, which is a person's to run*
+- [ ] **S22** — CloudFront + Lambda public demo — *built, applied and verified working when invoked
+  directly; both front doors (CloudFront, and a public function URL) are refused by AWS until the
+  account is verified*
 
 **Exit criteria**
 
@@ -217,11 +218,13 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
   `34471965342` on `dd7f802`, and on every merge to `main` since
 - [x] S3 objects land under correct date/hour partitions and replay reads them back — hour
   `2026-09-11T12` of all four topics, verified by replay Jobs under their own read-only role
-- [ ] A public HTTPS URL serves the dashboard; Lambda lookup returns real data — **half**: the lookup
-  function answered from the real table on 2026-09-11 (30 shipments, a full plan and incidents for
-  `SHP-HYD-0018`). The URL itself no longer waits on AWS — the lookup now serves the dashboard's
-  files as well, on its own function URL — but the apply that switches it on has not been run, so
-  this stays unticked until the real address has been opened
+- [ ] A public HTTPS URL serves the dashboard; Lambda lookup returns real data — **the second half
+  passes, the first is blocked by AWS.** The deployed lookup answers from the real table (147
+  shipments, 373 incidents, archived through 2026-09-17) and serves the dashboard's files with the
+  right content types and cache headers; the archive build renders fully in a browser against it,
+  plan and geofences included. No public address exists: CloudFront is refused pending account
+  verification, and so is a public Lambda function URL — 403 at the URL layer, no invocation
+  reaching the function
 - [ ] `terraform destroy` removes everything cleanly — not yet run; it follows the URL
 - [ ] **AWS billing console reads $0.00** — read at the end of the month
 
@@ -2621,6 +2624,12 @@ as answering its questions**, reading them from the same S3 site bucket CloudFro
 CloudFront is not deleted from the configuration; it is behind `cloudfront_enabled`, default
 `false`, and flipping it back is one variable and an apply.
 
+**It was applied, and AWS refused that door too.** With `AuthType: NONE` and AWS's own documented
+public-access policy in place, every request to the function URL returns 403 at the URL layer, with
+no invocation reaching the function. The verification gate is not about CloudFront; it is about
+exposing a public endpoint at all. The session therefore ends with the design proven and the address
+still missing -- which is a different and more useful thing to know than "CloudFront is pending".
+
 This is the third alternative [ADR 0003](docs/adr/0003-the-public-view-is-indexed-on-arrival.md)
 rejected, now taken under a block, and its addendum says so in those words. What the ADR actually
 argues for survives: an archive file is still read exactly once, when it lands, so S3's request
@@ -2641,6 +2650,15 @@ reachable by one distribution alone.
 
 ### What surprised me
 
+**The fallback was blocked by the same gate, which is this session's real finding.** The whole point
+of a second front door was that it used a different service. It does not help: AWS refuses a public
+Lambda function URL on an unverified account exactly as it refuses a distribution. Half an hour after
+the change, config and policy both correct, every request was still 403 and CloudWatch recorded no
+invocation at all. "Find another service" is not a way around an account-level restriction, because
+the restriction is on the *capability* -- being publicly reachable -- not on the service providing
+it. Worth establishing by trying; the alternative was to go on assuming CloudFront was the only thing
+in the way.
+
 **The case could not be read from a terminal at all.** `aws support describe-cases` answers
 `SubscriptionRequiredException`: the Support API is a Business-plan feature. CloudTrail was the
 fallback and it is the wrong tool — it records this account's own API calls, so it shows the console
@@ -2655,6 +2673,13 @@ cover.
 **`count` works on a data source.** The two AWS-managed CloudFront policies are looked up by name,
 and looking them up when there is no distribution to use them is a wasted call at best. `count` on a
 `data` block is legal and reads the same as it does on a resource.
+
+**`public-publish.sh` had never run on this machine.** Under Git Bash `$REPO_ROOT` is
+`/g/project/fleet-tracking`, and the AWS CLI is a Windows binary that cannot open that path: it fails
+with "No such file or directory" naming a path that plainly exists. CI runs the same script on
+ubuntu, where the path is already right, so nothing had ever caught it. `lib.sh` gains `native()`
+(`cygpath -m` where it exists, the identity elsewhere), which `aws-link.sh` had already been doing
+inline for its one upload.
 
 **An empty Terraform output and an empty repository variable are not the same thing.** The
 distribution id is now `""` when there is no distribution, which `terraform output -raw` prints as
@@ -2673,16 +2698,26 @@ variable that exists and is empty, and the CI job's `vars.X != ''` test cannot t
 | `PublicViewIT` | 3 tests green. The new one serves the page at `/`, a hashed asset with its year-long cache header, a PNG returned base64, a deep link falling back to `index.html`, a missing `.js` staying 404, a `..` path refused, `/api/nope` staying JSON — and the CloudFront-mode handler still refusing to serve a page at all |
 | `aws sts get-caller-identity` | `user/goutham-admin`, not `:root` |
 | Account contact details | Complete — so an incomplete profile is not why verification stalled |
-| The CloudFront block itself | **Not re-probed.** A `create-distribution` with a deliberately invalid config would tell whether the refusal is still live without creating anything, and it was not run this session; the case's status in the console is still *Pending Amazon Action* |
+| `./scripts/infra-up.sh --auto-approve` | **Applied.** 3 added, 3 changed, 3 destroyed, exactly as planned |
+| `./scripts/public-publish.sh` | Failed first on a Windows path (see above), then published: both functions on the new code, the archive build uploaded |
+| **The public URL** | **403 on every path**, half an hour after the change. `AuthType: NONE`, AWS's documented public policy present, and CloudWatch shows **no invocation** — the refusal is at the URL layer |
+| The function itself, invoked directly | **Works.** `/api/meta` → 147 shipments, 373 incidents, archived through `2026-09-17T09:44:35Z`; `/` → `index.html` as `text/html` with `max-age=60`; `/assets/index-*.js` → JavaScript with its year-long immutable header |
+| **The archive build in a browser** | **Renders.** Served locally from the uploaded bundle against the deployed function: 93 tile responses all 200, 147 markers, 0 console errors, incident list and "archived through" populated. Clicking a truck fetched `/api/shipments/SHP-HYD-0002` (200) and drew its plan, geofences and travelled line, with the manifest panel saying it is not part of the public archive view. **This had never been checked before** |
+| The CloudFront block itself | Not re-probed directly; the function-URL refusal makes the point more cheaply, and the case is still *Pending Amazon Action* |
 
 ### Left open
 
-- **The apply has not been run.** `./scripts/infra-up.sh --auto-approve`, then
-  `./scripts/public-publish.sh`. Until then M8's third criterion stays unticked, because nothing has
-  served a page yet.
-- **The archive build has never actually been served.** It has been built, grepped and uploaded, but
-  no browser has loaded it from AWS through any front door. The first apply is also its first real
-  test, and a green build says nothing about whether the map draws.
+- **M8's third criterion cannot be met from this repository.** Everything it names except the public
+  address is now demonstrated. The address needs AWS to verify the account, and both ways of asking
+  for one are refused. There is no third way worth taking: API Gateway's free tier expires after
+  twelve months (ADR 0001 admits only free-forever tiers) and would very likely be refused on the
+  same grounds, and S3 website hosting is HTTP only, which a page loading a map over HTTPS cannot use.
+- **The open function URL is a decision to revisit, not a settled state.** It is harmless while AWS
+  refuses public traffic, and becomes a real exposure the moment verification lands — at which point
+  CloudFront is available again and is the better answer. Someone should choose deliberately on that
+  day rather than discover it.
+- **The pull request is not open.** Branch `public-view-without-cloudfront`, commits `d7cdb72` and
+  `ab2514c`, pushed. The tooling refused `gh pr create`; the body is written and waiting.
 - The support case stays open. When AWS verifies the account, `cloudfront_enabled = true` and an
   apply put the edge back; the function stops serving the page on its own, with no code change.
 - Criteria four and five still follow: `infra-down.sh`, and $0.00 read at the end of the month.
@@ -2691,30 +2726,36 @@ variable that exists and is empty, and the CI job's `vars.X != ''` test cannot t
 
 ## Next up
 
-**The plan is built, and its last step no longer waits on anybody.** 23 of 24 sessions are done and
-M0-M7 and M9 are complete. S22's public address was rebuilt on a Lambda function URL because AWS's
-account verification for CloudFront never arrived; what is left is running it.
+**The plan is built. What is left is not buildable from here.** 23 of 24 sessions are done and M0-M7
+and M9 are complete. M8's public address needs AWS to verify the account, and as of 2026-09-21 both
+ways of obtaining one are refused: a CloudFront distribution, and a public Lambda function URL. The
+gate is on being publicly reachable, not on a particular service.
 
-1. `./scripts/infra-up.sh --auto-approve` **in a terminal of its own** (the auto-mode classifier
-   blocks IAM applies, so a person runs it). The plan is **3 to add, 3 to change, 3 to destroy**, and
-   with no distribution to deploy globally it finishes in under a minute. It sets
-   `PUBLIC_SITE_BUCKET` and removes `PUBLIC_DISTRIBUTION_ID`, which together switch CI's
-   `publish-public` job on in its no-edge form.
-2. `./scripts/public-publish.sh`: deploys both functions and fills the site bucket. The next merge
-   does the same.
-3. Check M8's third criterion at the real address: the page draws, and `/api/shipments/<id>` answers
-   through it. This is the archive build's first real outing, so check it in a browser rather than
-   with `curl` — a green build says nothing about whether the map draws.
-4. Then the fourth: `./scripts/infra-down.sh`, and confirm nothing tagged `Project=fleet-tracker`
+Everything else that criterion names is done and demonstrated. The deployed lookup answers from the
+real table and serves the dashboard's files; the archive build renders in a browser against it, plan,
+geofences and incident list included. The apply is done. The site bucket is filled.
+
+**Open items, in order of who can act:**
+
+1. **Open the pull request.** Branch `public-view-without-cloudfront`, commits `d7cdb72` and
+   `ab2514c`. The body is written; `gh pr create` was refused by tooling, so it is a manual step.
+2. **Chase or abandon the support case.** `case-964291633170-muen-2026-7bee5ab83a24ad84`, readable
+   only in the console. Replying pushes it back into AWS's queue; that is the only lever available.
+   If it is ever granted, set `cloudfront_enabled = true` and apply — no code changes.
+3. **Decide about the open function URL.** It is `AuthType: NONE` with a public invoke permission
+   today. Harmless while AWS refuses public traffic; a real exposure the instant it does not. On the
+   day verification lands, CloudFront is available again and is the better door. Choose then, rather
+   than find out.
+4. **Criterion four**: `./scripts/infra-down.sh`, then confirm nothing tagged `Project=fleet-tracker`
    remains. This deletes the archive too; it is a copy, and the next run of the platform refills it.
    `infra-up.sh`, `aws-link.sh` and `public-backfill.sh` bring everything back.
-5. The fifth, $0.00 on the bill, is read at the end of the month.
+5. **Criterion five**: $0.00 on the bill, read at the end of the month.
 
-**If AWS ever verifies the account**, set `cloudfront_enabled = true` in `infra/cloud/variables.tf`
-and apply. The distribution, both origin access controls and the API cache policy come back, the
-function URL closes to everything but CloudFront, and `SITE_BUCKET` leaves the function's
-environment, which is what makes it stop serving the page. No code changes either way. The support
-case is `case-964291633170-muen-2026-7bee5ab83a24ad84`, and it can only be read in the console.
+**What was considered and rejected as a third front door.** API Gateway's HTTP API free tier expires
+after twelve months, which ADR 0001 does not allow, and there is no reason to think an unverified
+account may expose one when it may not expose a function URL. S3 static website hosting is HTTP only,
+and a page that loads a map cannot be served over plain HTTP without the browser blocking it. Neither
+is worth the change.
 
 **`StreamBroadcasterTest.aStalledViewerNeverBlocksTheProducer`** has a wall-clock ceiling that a busy
 machine can break. If it fails in CI, make the bound relative (compare against an unstalled baseline)
