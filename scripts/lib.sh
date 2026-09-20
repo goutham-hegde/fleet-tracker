@@ -7,6 +7,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLUSTER_NAME="fleet-tracking"
 KIND_CONFIG="$REPO_ROOT/deploy/kind-cluster.yaml"
 
+# A path a Windows program can open.
+#
+# Under Git Bash, $REPO_ROOT is /g/project/fleet-tracking. The AWS CLI is a Windows binary and
+# cannot open that -- it needs G:/project/fleet-tracking -- and the failure is a confusing
+# "No such file or directory" naming a path that plainly exists. `cygpath -m` gives the Windows
+# drive with forward slashes, which is what `fileb://` and the rest accept.
+#
+# On Linux there is no cygpath and the path is already right, so this returns it unchanged. That
+# matters: CI runs these same scripts on ubuntu.
+native() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 # winget installs tools into per-package directories and updates the *user* PATH,
 # which existing shells do not see until they restart. Add them here so scripts
 # work in the same shell session an install happened in.
