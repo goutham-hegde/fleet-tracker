@@ -106,10 +106,14 @@ if [ -n "${PUBLIC_DISTRIBUTION_ID:-}" ]; then
 
   domain="$(aws cloudfront get-distribution --id "$PUBLIC_DISTRIBUTION_ID" \
     --query 'Distribution.DomainName' --output text 2>/dev/null || true)"
-  [ -n "$domain" ] && ok "https://$domain"
+  if [ -n "$domain" ]; then ok "https://$domain"; fi
 else
   # No edge. The lookup function serves the page from this bucket and holds each file for a few
   # minutes, so a fresh build reaches viewers once those environments expire rather than at once.
   ok "no distribution: the lookup function serves the site; new files are live within ~5 minutes"
-  [ -n "${PUBLIC_URL:-}" ] && ok "$PUBLIC_URL"
+  # `if`, not `[ ... ] && ok ...`. A false test as a script's LAST command makes the script's exit
+  # status 1, and this one is last. PUBLIC_URL is only set when these values were read from
+  # Terraform, so in CI -- where they come from repository variables and that block is skipped --
+  # it is always empty, and the whole publish reported failure after doing every part of its job.
+  if [ -n "${PUBLIC_URL:-}" ]; then ok "$PUBLIC_URL"; fi
 fi
