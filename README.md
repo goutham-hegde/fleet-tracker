@@ -62,9 +62,11 @@ copies carry one event id, sends a corrupt message and finds it in the dead-lett
 shipment service refuse a manifest that breaks its customer's contract, summarises the SLA
 incidents, and then crashes the tracking processor with `kill -9` and watches it catch up.
 
-**Without AWS**, one pod, `archiver`, stays in `CreateContainerConfigError`, naming a missing
-`archive-destination` ConfigMap. That is expected: it copies events to S3, and the rest of the
-platform does not depend on it. See [AWS](#aws) to connect one.
+**No AWS account is needed for any of this.** The archiver copies the canonical topics into an S3
+bucket, and locally that bucket is a [MinIO](https://min.io) running in the cluster: `stack-up.sh`
+deploys it and runs `./scripts/local-link.sh`, which generates a key, writes the
+`archive-destination` ConfigMap and creates the bucket. Archiving and replay work exactly as they do
+against AWS, because only the address changes. See [AWS](#aws) for the cloud half, which is optional.
 
 **When you are done:**
 
@@ -933,6 +935,10 @@ object ArgoCD manages. Both cases here are in `deploy/argocd/application.yaml`:
 
 ## AWS
 
+**This whole section is optional.** Everything above runs without an account, including the archive
+and replay — see [The archive](#the-archive). What AWS adds is a public address for the archived
+data, and pods that prove their own identity rather than sharing a key.
+
 The platform runs on the laptop. AWS holds only what can exist there at **$0.00** under the
 always-free allowances: IAM, a budget, a few megabytes of S3, a small DynamoDB table, and Lambda
 (behind CloudFront, once the account may have one). Nothing that could run Kafka or MongoDB is free, so there is no cloud cluster and no
@@ -1019,17 +1025,32 @@ of S3 writes (the thing that costs money) to about four an hour. Offsets are com
 the oldest record not yet in S3, so a crash repeats records and never loses one. Positions expire
 after three days and the other topics after thirty.
 
+**The bucket does not have to be in AWS.** The local overlay deploys a MinIO alongside the cluster
+and points the archiver at it, which needs no account and changes no code: the service has had an
+endpoint override since the integration tests were written, and setting it also selects path-style
+addressing and skips the startup identity check. The two destinations are told apart by one key,
+`endpoint`, in the `archive-destination` ConfigMap — present means MinIO, absent means AWS — and
+everything downstream branches on that.
+
 ```bash
-./scripts/aws-link.sh     # after every cluster creation: publish the key, write fleet/archive-destination
-kubectl logs -n fleet deployment/archiver | grep -E "AWS identity|Archived|PAUSED"
+./scripts/local-link.sh   # the local bucket: generate a key, write fleet/archive-destination, create it
+./scripts/local-link.sh --show                                   # the key, for the AWS CLI
+./scripts/aws-link.sh     # instead, for real S3: publish the cluster's key, write the same ConfigMap
+kubectl logs -n fleet deployment/archiver | grep -E "Archive store|Archived|PAUSED"
 ./scripts/archive-replay.sh position.events.v1 2026-09-11T12:00:00Z                 # verify one hour
 ./scripts/archive-replay.sh exceptions.v1 <from> <to> exceptions.v1                 # republish a range
 ```
 
-Replay runs as a Job under the read-only role. By default it only verifies: every line parses, sits
-under the hour it claims and has an event id, and duplicates are counted by event id. Republishing
-onto a topic has to be asked for, and republished records carry a `fleet.replayed-from` header that
-the archiver skips, so a replay never doubles the archive.
+Replay runs as a Job, against AWS under a role that may only read the archive. By default it only
+verifies: every line parses, sits under the hour it claims and has an event id, and duplicates are
+counted by event id. Republishing onto a topic has to be asked for, and republished records carry a
+`fleet.replayed-from` header that the archiver skips, so a replay never doubles the archive.
+
+Two things the local bucket does not reproduce, both worth knowing before reading the section above
+as if it still applied in full: there is one key rather than an identity per workload, so the write
+and read privileges are not separated; and nothing expires, because lifecycle rules are an S3
+feature. The public view is also unavailable locally, since its index is driven by S3 notifying a
+function each time a file lands.
 
 ### The public view
 
