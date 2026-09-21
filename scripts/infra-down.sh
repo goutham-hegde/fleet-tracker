@@ -45,4 +45,12 @@ if command -v gh >/dev/null 2>&1; then
     gh variable delete "$v" >/dev/null 2>&1 && ok "$v repository variable removed" || true
   done
 fi
-ok "Nothing of this project's remains in AWS. Check the billing console at the end of the month."
+# A successful destroy proves Terraform is happy with its own state, not that the account is empty.
+# Ask AWS instead. The tagging index is eventually consistent and can still be reporting a resource
+# that is already gone, so this lists rather than judges -- the verdict comes from running the sweep
+# again in a minute.
+log "Checking the account for anything left tagged Project=fleet-tracker"
+"$REPO_ROOT/scripts/aws-sweep.sh" || true
+
+ok "Teardown done. Confirm with: ./scripts/aws-sweep.sh --expect-empty (give the tag index a minute)"
+ok "Then check the billing console at the end of the month."

@@ -2754,14 +2754,13 @@ variable that exists and is empty, and the CI job's `vars.X != ''` test cannot t
 `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws`. All 24 sessions are done;
 M0-M7 and M9 are complete, and M8 is 3 of 5.
 
-1. **Open the pull request.** Branch `public-view-without-cloudfront`. The body is written;
-   `gh pr create` was refused by tooling, so it is a manual step.
-2. **Criterion four**: `./scripts/infra-down.sh`, then confirm nothing tagged `Project=fleet-tracker`
-   remains. This deletes the archive too; it is a copy, and the next run of the platform refills it.
-   `infra-up.sh`, `aws-link.sh` and `public-backfill.sh` bring everything back. Note this also takes
-   the public URL down, and a recreated function URL gets a **new address**.
-3. **Criterion five**: $0.00 on the bill, read at the end of the month.
-4. **The support case** (`case-964291633170-muen-2026-7bee5ab83a24ad84`, console only) can stay open
+1. **Criterion four**: `./scripts/infra-down.sh`, then `./scripts/aws-sweep.sh --expect-empty` to
+   confirm nothing tagged `Project=fleet-tracker` remains. This deletes the archive too; it is a
+   copy, and the next run of the platform refills it. `infra-up.sh`, `aws-link.sh` and
+   `public-backfill.sh` bring everything back. Note this also takes the public URL down, and a
+   recreated function URL gets a **new address**.
+2. **Criterion five**: $0.00 on the bill, read at the end of the month.
+3. **The support case** (`case-964291633170-muen-2026-7bee5ab83a24ad84`, console only) can stay open
    or be dropped. If AWS ever verifies the account, `cloudfront_enabled = true` and an apply put the
    edge back, close the function URL to everything but CloudFront, and change no code.
 
