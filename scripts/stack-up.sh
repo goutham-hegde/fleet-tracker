@@ -73,18 +73,24 @@ kubectl apply -k "$REPO_ROOT/deploy/overlays/local"
 # what makes a rebuilt image appear to have no effect.
 WORKLOADS=(ingest-gateway tracking-processor shipment-service exception-service dashboard-api dashboard fleet-simulator archiver)
 
-# The archiver is the one workload that needs something from outside this machine: the bucket and
-# role that scripts/aws-link.sh writes into the archive-destination ConfigMap from Terraform's
-# outputs. Without AWS it waits, naming the missing ConfigMap, and the rest of the platform is
-# unaffected -- so it is left out of the wait rather than failing the whole bring-up.
+# The archiver is the one workload that needs a destination, and it will not start without one: it
+# waits in CreateContainerConfigError naming the archive-destination ConfigMap. Which script writes
+# that ConfigMap depends on which store is deployed.
+#
+# The local overlay includes the local-archive component, so MinIO is running in the cluster and
+# local-link.sh is the one to run -- no account, no network, no sign-in. Only a cluster with that
+# component removed needs AWS, and then only if the CLI is actually signed in.
 if ! kubectl get configmap/archive-destination -n fleet >/dev/null 2>&1; then
-  if aws sts get-caller-identity >/dev/null 2>&1; then
+  if kubectl get statefulset/minio -n fleet >/dev/null 2>&1; then
+    log "Linking the archiver to the MinIO beside it"
+    "$REPO_ROOT/scripts/local-link.sh" || warn "local-link.sh failed; the archiver will wait until it succeeds"
+  elif aws sts get-caller-identity >/dev/null 2>&1; then
     log "Linking the cluster to AWS for the archiver"
     "$REPO_ROOT/scripts/aws-link.sh" || warn "aws-link.sh failed; the archiver will wait until it succeeds"
   fi
 fi
 if ! kubectl get configmap/archive-destination -n fleet >/dev/null 2>&1; then
-  warn "No archive-destination ConfigMap, so the archiver will wait. Run: aws login --region ap-south-1 && ./scripts/aws-link.sh"
+  warn "No archive-destination ConfigMap, so the archiver will wait. Run: ./scripts/local-link.sh"
   WORKLOADS=("${WORKLOADS[@]/archiver}")
 fi
 

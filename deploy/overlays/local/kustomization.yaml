@@ -27,6 +27,10 @@ resources:
 components:
   - ../components/simulated-fleet
   - ../components/lag-autoscaling
+  # The archive, on this laptop rather than in S3: a MinIO server and a static key in place of a
+  # bucket and an assumed role. Remove this line and run scripts/aws-link.sh instead of
+  # scripts/local-link.sh to put the archiver back on real S3; nothing else changes.
+  - ../components/local-archive
 
 patches:
   # Never pull. The images are built on this machine and pushed into the Kind node with

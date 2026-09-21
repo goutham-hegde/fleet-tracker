@@ -1,0 +1,143 @@
+# MinIO: S3, on this laptop.
+#
+# The archiver was written against S3 and nothing here changes that. It still speaks the S3 API,
+# still signs every request with SigV4, still writes the same gzipped NDJSON under the same
+# partitioned keys. The only difference is the address it sends them to, and the archiver has had a
+# switch for that since S21 -- `fleet.archiver.endpoint`, which ArchiverIT uses to point the same
+# code at an emulator. Setting it also turns on path-style addressing (host/bucket/key), because a
+# server on a cluster-internal name has no DNS for the bucket.host/key form AWS itself uses.
+#
+# A StatefulSet for the same reason Kafka and MongoDB are: the volume is the store. It is also what
+# avoids a Deployment's rolling update deadlocking on a ReadWriteOnce claim the old pod still holds.
+#
+# The image is quay.io, not Docker Hub, and the tag is the last community release: MinIO's
+# feature work moved to its commercial product during 2025, and the `hotfix` tags that look newer
+# are subscriber builds. That also means this build has no browser console -- it is the S3 API and
+# nothing else. Inspect the archive with the AWS CLI instead:
+#
+#   kubectl port-forward -n fleet service/minio 19000:9000
+#   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... aws s3 ls s3://<bucket>/archive/ \
+#     --endpoint-url http://localhost:19000 --recursive
+#
+# scripts/local-link.sh prints those credentials; they are generated per cluster and live only in
+# the archive-credentials Secret, never in this repository.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/part-of: fleet-tracking
+spec:
+  selector:
+    app.kubernetes.io/name: minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: s3
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/part-of: fleet-tracking
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio
+        app.kubernetes.io/part-of: fleet-tracking
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+          args:
+            - server
+            - /data
+            - --address
+            - :9000
+          env:
+            # The root credentials. Generated per cluster by scripts/local-link.sh and held in a
+            # Secret, so that the promise archiver.yaml makes -- no access key in this repository --
+            # survives the move off AWS. Until that Secret exists this pod waits in
+            # CreateContainerConfigError naming it, exactly as the archiver waits for its
+            # destination, and for the same reason: a store nobody can authenticate against is
+            # worse than one that has not started.
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: archive-credentials
+                  key: access-key-id
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: archive-credentials
+                  key: secret-access-key
+            # MinIO keeps its certificate directory under $HOME. The root filesystem is read-only,
+            # so point HOME at the one writable mount; nothing is put there, but it is opened.
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: s3
+              containerPort: 9000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # MinIO answers this unauthenticated, which is why it is the probe: a readiness check that
+          # needed credentials would fail for two different reasons and not say which.
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard
+        resources:
+          # The lifecycle rules S3 enforced (positions 3 days, everything else 30) have no equivalent
+          # here, so this is sized for a laptop rather than for a retention policy: a session's four
+          # topics compress to single-digit megabytes an hour.
+          requests:
+            storage: 5Gi
