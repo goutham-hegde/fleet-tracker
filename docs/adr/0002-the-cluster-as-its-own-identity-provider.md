@@ -1,6 +1,6 @@
 # ADR 0002 — How pods on the laptop prove who they are to AWS
 
-**Status:** accepted · 2026-09-11 · S21
+**Status:** accepted · 2026-09-11 · S21 · [addendum](#addendum--when-there-is-no-aws-to-prove-anything-to-2026-09-22)
 
 ## Context
 
