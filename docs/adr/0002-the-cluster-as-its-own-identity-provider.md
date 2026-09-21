@@ -72,3 +72,32 @@ has never heard of.
   every bucket private, but it is a distribution to create and wait for, in order to serve two
   small files that are meant to be public. It is worth revisiting only if S22's CloudFront
   distribution makes it free to add.
+
+## Addendum — when there is no AWS to prove anything to (2026-09-22)
+
+This decision assumed the archive lives in S3. As of S25 it does not have to: the default local
+deployment archives to a MinIO in the cluster, and a static key in a Kubernetes Secret is what
+authenticates the archiver to it. That is the alternative rejected above — "an IAM user with an
+access key" — arriving by another door, and it deserves a straight answer rather than a quiet
+exception.
+
+**Why the objection does not transfer.** What made that alternative unacceptable was never the
+*shape* of the credential. It was what the credential opened: a long-lived key to an AWS account,
+sitting on a laptop, needing rotation by somebody who remembered it existed. The key here opens a
+storage server inside a single-node cluster on one machine, holding a copy of records Kafka already
+has. It is generated per cluster, never committed, and dies with the cluster — there is nothing to
+rotate because there is nothing that outlives its store. No AWS account is reachable with it, which
+is the entire difference.
+
+**What is genuinely lost, and is not excused by that.** Two roles meant the archiver could only
+write the archive and the replay could only read it, enforced outside either program, so a bug in
+the replay tool could not damage what it was verifying. MinIO is given one root key and both
+clients use it. That separation does not survive the move, and no amount of "it's only local"
+recovers it. Anyone reading this ADR as a description of what runs by default should read it as
+describing the AWS path specifically.
+
+**This decision is not withdrawn.** Nothing in it is deleted, `aws-link.sh` is unchanged, and the
+roles, trust policies and published signing key are all still built by `infra/cloud`. Removing one
+line from `deploy/overlays/local` and running `aws-link.sh` puts the archiver back under this
+design with no other edit. What changed is that it is no longer the only way to have an archive —
+and therefore no longer a reason the platform needs a cloud account at all.
