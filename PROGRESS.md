@@ -3,10 +3,12 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-21 · **Current position:** all 24 sessions done; M0-M7 and M9 complete.
-**The public view is live** at `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws`
-— on a Lambda function URL rather than CloudFront, which AWS still refuses until it verifies the
-account. M8 is 3 of 5 criteria; the last two are a teardown and a bill
+**Last updated:** 2026-09-22 · **Current position:** all 25 sessions done; M0-M7 and M9 complete.
+**The whole platform runs with no cloud account** — as of S25 the archive writes to a MinIO inside
+the cluster, so nothing needs a sign-in. **The public view is still live** at
+`https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws` — on a Lambda function URL
+rather than CloudFront, which AWS still refuses until it verifies the account. M8 stays at 3 of 5;
+the last two are a teardown and a bill, deferred to the Free-plan deadline
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -20,7 +22,8 @@ M6 ██████████  1/1              complete
 M7 ██████████  2/2              complete
 M8 ██████████  3/3              ← public, on a function URL; CloudFront still refused
 M9 ██████████  2/2              complete
-               24/24 sessions
+S25 ─────────  1                 off-milestone: the archive, without an account
+               25/25 sessions
 ```
 
 Milestones are **gated** — a milestone does not start until the previous one's exit criteria all
@@ -2748,19 +2751,140 @@ variable that exists and is empty, and the CI job's `vars.X != ''` test cannot t
 
 ---
 
+## S25 — The archive, without an account · 2026-09-22 · M8
+
+AWS stopped being worth depending on. Between an account AWS will not verify, a support case that
+has not moved since 2026-09-15, and sessions that now begin by re-authenticating something before
+any work can start, the cloud had become the slowest part of a platform that is otherwise entirely
+local. So this session removed the dependency rather than nursing it.
+
+Exactly one workload was actually broken without AWS: the **archiver**. It refuses to start without
+a destination — no `archive-destination` ConfigMap, so the pod waits in `CreateContainerConfigError`
+and a full stack run has a hole in it where the archive and every replay should be. Everything else
+— Kafka, MongoDB, the six services, the dashboard, KEDA, ArgoCD — never touched AWS at all.
+
+**It needed no Java.** S21 had already given the service an endpoint override so that `ArchiverIT`
+could point the same code at an S3 emulator, and setting it does two more things for free: it
+selects path-style addressing, and it skips the startup STS identity check. So the whole change is
+a MinIO StatefulSet, a kustomize component that rewires the archiver, and a script. The archiver
+still speaks S3, still signs with SigV4, still writes the same gzipped NDJSON under the same
+partitioned keys. Only the address changed.
+
+What is given up is named rather than glossed. Against AWS the pod proved its own identity to STS
+and received credentials nobody stored; the archiver could only write the archive and the replay
+could only read it, enforced by two separate roles. MinIO checks a pair of strings. That key is
+generated per cluster into a Secret and never committed, so S21's promise that no access key exists
+anywhere in this repository still holds — but the separation of privilege does not survive the move,
+and pretending otherwise would be the wrong kind of quiet.
+
+### Decisions
+
+| Decision | Choice | Alternative rejected |
+|---|---|---|
+| Local object store | **MinIO** with a PVC, as a StatefulSet | `adobe/s3mock`, already a test dependency and already on the machine. It is a test double: in-memory by default, so every pod restart would silently empty the archive — the one property an archive exists to have |
+| Where the difference lives | A **kustomize component** listed by `overlays/local` only | Changing `deploy/base/services/archiver.yaml`. The base names no environment, and this is the most environment-specific thing in the platform. It also keeps `overlays/gitops` — what ArgoCD deploys — completely untouched |
+| How the two worlds are told apart | An **`endpoint` key** in the existing `archive-destination` ConfigMap: present means MinIO, absent means AWS | A separate ConfigMap, or a flag passed to each script. One key in the object both scripts already write means `archive-replay.sh` branches on a fact it can read, rather than on something a caller has to remember |
+| Reaching MinIO from the host | A temporary **`kubectl port-forward`** inside `local-link.sh` | A Kind host port mapping. Those are fixed when the cluster is created, so adding one would mean recreating the cluster and losing Kafka and MongoDB's volumes — an absurd price for a bucket-creation call |
+| The credentials | **Generated per cluster** into a Secret, reused if present | Committing a well-known development key. The archiver's own manifest promises that no access key exists in this repository; a fixed key would have made that comment a lie. Reused rather than regenerated because MinIO initialises its store with the first root key it sees |
+| The public view | **Left on AWS, and left alone** | Running the lookup function against DynamoDB Local behind an HTTP shim. It is driven by S3 object notifications, so a local version means replacing the trigger as well as the store and the database — a session of its own, for a feature the platform does not need to run |
+
+### Built
+
+- `deploy/overlays/components/local-archive/` — a MinIO StatefulSet on a 5 Gi claim, a Service, and
+  a strategic-merge patch that deletes the archiver's `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`,
+  `AWS_ROLE_SESSION_NAME` and its projected token volume, and adds `FLEET_ARCHIVER_ENDPOINT` plus a
+  static key from the `archive-credentials` Secret
+- `scripts/local-link.sh` — the counterpart of `aws-link.sh`, and deliberately the same shape:
+  generate what the environment supplies, write it into the two objects the manifests read, restart
+  the archiver only when what it holds has actually changed. `--show` prints the key for the AWS CLI
+- `scripts/archive-replay.sh` — branches on the `endpoint` key, emitting either the web-identity
+  wiring and its token volume or a static key and no volume at all
+- `scripts/stack-up.sh` — reaches for `local-link.sh` when `statefulset/minio` exists, and for AWS
+  only on a cluster where the component has been removed
+- `scripts/aws-sweep.sh` — what the account holds, found by tag across `ap-south-1` and `us-east-1`
+  plus the budget, with `--expect-empty` for the teardown. Written before AWS was dropped; it is
+  what M8's fourth criterion needs whenever that teardown happens
+
+### What surprised me
+
+**`pipefail` killed the script on the run that mattered.** `local-link.sh` reads the existing key
+with `kubectl get secret | base64 -d`, to reuse it. On the very first run there is no Secret,
+`kubectl` exits non-zero, and `lib.sh` sets `set -euo pipefail` — so the pipeline failed, and the
+script died at the exact moment it had correctly established that it needed to create the thing
+whose absence it was checking for. It printed one line and stopped. The fix is to capture with
+`|| true` into a variable rather than pipe, and the general lesson is that **a "does it exist" check
+written as a pipeline is a trap under `pipefail`**: the failure it is designed to detect becomes the
+failure that stops the script.
+
+**MinIO is not where it used to be.** Docker Hub answers `object not found` for `minio/minio`; the
+images are on quay.io. The newest community release is `RELEASE.2025-09-07T16-13-09Z`, and the
+`hotfix` tags that sort above it are subscriber builds of older releases, so "newest tag" is exactly
+the wrong choice. The community build also no longer has a browser console — it is the S3 API and
+nothing else, which is all the archiver wanted, but it does mean the AWS CLI through a port-forward
+is the only way to look inside.
+
+**The cluster was fine; the wait was short.** `cluster-start.sh` gave up on 16 pods still `Unknown`
+after two minutes and advised recreating the cluster. They were all `Running` moments later — a
+four-day-old stop just takes longer than that to settle. Worth remembering before following that
+advice and destroying a working cluster.
+
+**Two stale facts in the notes.** Both pull requests from the previous session were merged on
+2026-09-21, but "the pull request is not open" was still the first item under "Next up".
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `kubectl kustomize deploy/overlays/local` | Renders. The archiver has `FLEET_ARCHIVER_ENDPOINT` and both secret refs, and **no** `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_SESSION_NAME` or `aws-token` volume — only the `/tmp` mount is left |
+| `kubectl kustomize deploy/overlays/gitops` | **Unchanged**: no MinIO, web identity still in place. What ArgoCD deploys is untouched |
+| `./scripts/local-link.sh` | Generated a key, wrote the ConfigMap, waited for `minio-0`, created `s3://fleet-tracker-archive`, restarted the archiver |
+| The stale AWS ConfigMap | `archiver-role-arn` and `replay-role-arn` **pruned** by the apply; only `bucket`, `region`, `endpoint` remain |
+| Archiver startup log | `Archive store s3://fleet-tracker-archive at emulator http://minio.fleet.svc.cluster.local:9000; no AWS identity to check` |
+| Archiver pod | **1/1 Running.** It had been `0/1` for days |
+| Files in MinIO | Three, under the unchanged layout: `archive/<topic>/dt=2026-09-21/hour=20/p<part>-o<offset>-<millis>.ndjson.gz` for positions, statuses and exceptions — written by the previous pod's graceful shutdown flush |
+| `./scripts/archive-replay.sh position.events.v1 2026-09-21T20:00:00Z` | **Replay verified.** 1 file, 359 lines, 357 distinct events, 2 duplicates, 0 misplaced, 0 without an event id. The duplicates are the documented mobile resends |
+| Whole `fleet` namespace | Every pod `1/1 Running` — Kafka, MongoDB, MinIO, all six services, the simulator — with no AWS credentials on the machine at all |
+| `aws sts get-caller-identity` | Session expired, and **nothing needed it** |
+
+### Left open
+
+- **M8's criteria four and five are now unreachable as written.** Four is `terraform destroy` removing
+  everything cleanly; five is $0.00 on the bill. Neither can be ticked while the account is left
+  standing and unattended, and neither is ticked here. `aws-sweep.sh --expect-empty` is the check
+  criterion four was always missing, ready for whenever the teardown happens.
+- **The account is still live and still costs nothing**, with the budget alert as the backstop. The
+  public view at `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws` still
+  serves, and still shows real archived data through 2026-09-17. Nothing in this session touched it.
+- **The Free-plan deadline has not moved: 2027-03-10.** The account must be upgraded or wound down
+  (`infra-down.sh` first) before then. That is the real deadline on criterion four, not this session.
+- The public view remains cloud-only, because S3 object notifications are what drive its index.
+  Making it local means replacing the trigger, the store and the database together.
+- `aws-link.sh` is untouched and still correct. Removing the `local-archive` line from
+  `overlays/local` and running it puts the archiver back on real S3 with no other edit anywhere.
+
+---
+
 ## Next up
 
-**The plan is built and the public view is live**, at
-`https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws`. All 24 sessions are done;
-M0-M7 and M9 are complete, and M8 is 3 of 5.
+**The platform no longer needs AWS.** As of S25 the archive runs on a MinIO inside the cluster, so
+`stack-up.sh` brings up everything -- ingest, state, business rules, dashboard, archive and replay --
+with no account, no sign-in and nothing to re-authenticate. That was the decision of this session:
+the cloud had become the slowest part of a platform that is otherwise entirely local.
 
-1. **Criterion four**: `./scripts/infra-down.sh`, then `./scripts/aws-sweep.sh --expect-empty` to
-   confirm nothing tagged `Project=fleet-tracker` remains. This deletes the archive too; it is a
-   copy, and the next run of the platform refills it. `infra-up.sh`, `aws-link.sh` and
-   `public-backfill.sh` bring everything back. Note this also takes the public URL down, and a
-   recreated function URL gets a **new address**.
-2. **Criterion five**: $0.00 on the bill, read at the end of the month.
-3. **The support case** (`case-964291633170-muen-2026-7bee5ab83a24ad84`, console only) can stay open
+All 24 sessions are done; M0-M7 and M9 are complete, and M8 is 3 of 5 and stays there.
+
+1. **Nothing is blocking.** `./scripts/stack-up.sh` and `./scripts/walkthrough.sh` are the loop, and
+   `./scripts/local-link.sh` is what `aws-link.sh` used to be.
+2. **M8's criteria four and five are deferred, not abandoned.** Four is a clean `terraform destroy`,
+   five is $0.00 on the bill; both need the account torn down, and the real deadline for that is the
+   Free-plan expiry on **2027-03-10**, not any particular session. `./scripts/infra-down.sh` then
+   `./scripts/aws-sweep.sh --expect-empty` is the pair that proves it. Note the teardown also takes
+   the public URL down, and a recreated function URL gets a **new address**.
+3. **The public view stays up and stays cloud-only**, at
+   `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws`, serving archived data
+   through 2026-09-17. Its index is driven by S3 object notifications, so a local version would mean
+   replacing the trigger, the store and the database together.
+4. **The support case** (`case-964291633170-muen-2026-7bee5ab83a24ad84`, console only) can stay open
    or be dropped. If AWS ever verifies the account, `cloudfront_enabled = true` and an apply put the
    edge back, close the function URL to everything but CloudFront, and change no code.
 
@@ -2778,6 +2902,6 @@ sessions, so real usage is a few hundred. The index adds one read per file of th
 topics, and reads are a twelfth of the price. If the cluster is ever left running for weeks, the alarm
 is what says so, which is the alarm doing its job.
 
-Carried from S20: the Free-plan account must be upgraded or wound down (`infra-down.sh` first)
-before **2027-03-10**. Kind generates a new signing key per cluster, so **`aws-link.sh` must run
+Carried from S20, and now the only dated commitment left: the Free-plan account must be upgraded
+or wound down (`infra-down.sh` first) before **2027-03-10**. Kind generates a new signing key per cluster, so **`aws-link.sh` must run
 after every cluster creation**, or every pod token is refused with `InvalidIdentityToken`.
