@@ -2688,6 +2688,13 @@ cover.
 and looking them up when there is no distribution to use them is a wasted call at best. `count` on a
 `data` block is legal and reads the same as it does on a resource.
 
+**And it reported failure after succeeding, the first time CI ran it.** The script's last line was
+`[ -n "${PUBLIC_URL:-}" ] && ok "$PUBLIC_URL"`. `PUBLIC_URL` is only set when the values were read
+from Terraform, so in CI -- where they come from repository variables and that block is skipped --
+the test is false, and a false test as the last command *is* the script's exit status. Both
+functions had been deployed and the site uploaded. The same shape was already in the CloudFront
+branch from S22, latent because that path had never run either. Both are now `if`.
+
 **`public-publish.sh` had never run on this machine.** Under Git Bash `$REPO_ROOT` is
 `/g/project/fleet-tracking`, and the AWS CLI is a Windows binary that cannot open that path: it fails
 with "No such file or directory" naming a path that plainly exists. CI runs the same script on
