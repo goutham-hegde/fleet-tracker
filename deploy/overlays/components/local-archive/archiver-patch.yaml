@@ -1,0 +1,56 @@
+# Point the archiver at MinIO instead of S3, and pay for it with the thing that made S3 worth
+# having: the identity.
+#
+# Against AWS the pod proves who it is. The kubelet mints a signed token saying
+# "system:serviceaccount:fleet:archiver", STS checks the signature against the cluster's published
+# key, the role's trust policy names that exact account, and credentials come back that last an
+# hour and are never written anywhere. None of that exists here. MinIO checks a pair of strings.
+# So the web-identity wiring comes out -- the role ARN, the token file, the projected token volume
+# -- and a static key goes in, generated per cluster by scripts/local-link.sh.
+#
+# That is the honest trade of running without a cloud, and it is worth stating plainly rather than
+# hiding behind "it works locally": S21's whole point was that no access key exists anywhere. Here
+# one does. It is confined to a Secret in a single-node cluster on one laptop, it grants nothing
+# but a bucket of duplicated Kafka records, and it is regenerated whenever the cluster is.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: archiver
+  namespace: fleet
+spec:
+  template:
+    spec:
+      containers:
+        - name: archiver
+          env:
+            # Where S3 now lives. Setting this is also what turns on path-style addressing and
+            # what tells the startup identity check to skip itself -- there is no STS to ask.
+            - name: FLEET_ARCHIVER_ENDPOINT
+              value: http://minio.fleet.svc.cluster.local:9000
+            # First in the SDK's default credential chain, ahead of the web-identity provider that
+            # the three deletions below remove anyway.
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: archive-credentials
+                  key: access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: archive-credentials
+                  key: secret-access-key
+            # No STS, so nothing to assume and no token to hand it. Left in place these would make
+            # the SDK reach for a role that does not exist, behind static credentials that already
+            # answered -- dead configuration that reads as if it were load-bearing.
+            - name: AWS_ROLE_ARN
+              $patch: delete
+            - name: AWS_WEB_IDENTITY_TOKEN_FILE
+              $patch: delete
+            - name: AWS_ROLE_SESSION_NAME
+              $patch: delete
+          volumeMounts:
+            - mountPath: /var/run/secrets/aws
+              $patch: delete
+      volumes:
+        - name: aws-token
+          $patch: delete

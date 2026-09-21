@@ -1,0 +1,30 @@
+# The archive, without a cloud account.
+#
+# S21 gave the archiver a real destination: an S3 bucket, reached with credentials the pod earned by
+# proving its own identity to STS. That is still the design, and infra/cloud still builds it. This
+# component is what the platform does when there is no AWS to reach -- a local S3 server and a
+# static key, so that a full stack run archives, replays and demonstrates end to end on one laptop.
+#
+# It is a component rather than a change to the base for the usual reason: the base names no
+# environment. It is listed by deploy/overlays/local and not by deploy/overlays/gitops, so nothing
+# ArgoCD deploys is affected, and removing the one line that includes it -- then running
+# scripts/aws-link.sh instead of scripts/local-link.sh -- puts the archiver back on real S3 with no
+# other edit anywhere.
+#
+# What it does NOT reproduce, and what the bucket in infra/cloud still has:
+#
+#   - an identity per workload. Here every client shares one root key; there the archiver could
+#     only write and the replay could only read, enforced by two separate IAM roles.
+#   - lifecycle expiry. S3 deleted positions after 3 days and everything else after 30. Nothing
+#     expires here; the volume is sized for a laptop and a session, not for a retention policy.
+#   - object notifications, and therefore the public view. The indexer Lambda fired on every file
+#     landing in the bucket. MinIO can send such notifications, but there is no Lambda to receive
+#     them and no DynamoDB behind it, so the public view stays a cloud-only feature.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - minio.yaml
+
+patches:
+  - path: archiver-patch.yaml

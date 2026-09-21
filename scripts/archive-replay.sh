@@ -12,9 +12,13 @@
 #
 # Hours are UTC, and are the hours Kafka *received* the events, not the hours they describe.
 #
-# Runs as the archive-replay service account, whose role may list and read the archive and nothing
-# else, using the same image the archiver is running -- so the reader is always the build that
-# matches the writer. The Job's exit code is the verdict, and its log is the report.
+# Runs as the archive-replay service account, using the same image the archiver is running -- so the
+# reader is always the build that matches the writer. The Job's exit code is the verdict, and its
+# log is the report.
+#
+# Against AWS that account maps to a role that may list and read the archive and nothing else, so a
+# replay cannot damage what it is verifying. Against the local MinIO there is one root key and no
+# such separation; see deploy/overlays/components/local-archive.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 require kubectl "Ships with Docker Desktop."
@@ -26,10 +30,39 @@ TARGET="${4:-}"
 [ -n "$TOPIC" ] && [ -n "$FROM" ] || die "Usage: $(basename "$0") <topic> <from> [to] [target-topic]"
 
 kubectl get configmap/archive-destination -n fleet >/dev/null 2>&1 \
-  || die "No archive-destination ConfigMap. Run ./scripts/aws-link.sh"
+  || die "No archive-destination ConfigMap. Run ./scripts/aws-link.sh (or ./scripts/local-link.sh)"
 image="$(kubectl get deployment/archiver -n fleet -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)" \
   || die "No archiver deployment to take the image from."
 pull="$(kubectl get deployment/archiver -n fleet -o jsonpath='{.spec.template.spec.containers[0].imagePullPolicy}')"
+
+# Which kind of store is behind that ConfigMap. `endpoint` is written only by local-link.sh, and
+# its presence means MinIO: a static key instead of an assumed role, and no STS to check an identity
+# against. These two blocks are the whole difference between the cloud and the laptop.
+endpoint="$(kubectl get configmap/archive-destination -n fleet -o jsonpath='{.data.endpoint}' 2>/dev/null || true)"
+if [ -n "$endpoint" ]; then
+  identity="            - name: FLEET_ARCHIVER_ENDPOINT
+              value: $endpoint
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: archive-credentials, key: access-key-id}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: archive-credentials, key: secret-access-key}}"
+  token_mount=""
+  token_volume=""
+else
+  identity="            - name: AWS_ROLE_ARN
+              valueFrom: {configMapKeyRef: {name: archive-destination, key: replay-role-arn}}
+            - name: AWS_WEB_IDENTITY_TOKEN_FILE
+              value: /var/run/secrets/aws/token
+            - name: AWS_ROLE_SESSION_NAME
+              value: archive-replay"
+  token_mount="
+            - {name: aws-token, mountPath: /var/run/secrets/aws, readOnly: true}"
+  token_volume="
+        - name: aws-token
+          projected:
+            sources:
+              - serviceAccountToken: {audience: sts.amazonaws.com, expirationSeconds: 3600, path: token}"
+fi
 
 name="archive-replay-$(date -u +%Y%m%d%H%M%S)"
 args="            - --fleet.archiver.mode=replay
@@ -84,12 +117,7 @@ $args
               valueFrom: {configMapKeyRef: {name: archive-destination, key: region}}
             - name: AWS_REGION
               valueFrom: {configMapKeyRef: {name: archive-destination, key: region}}
-            - name: AWS_ROLE_ARN
-              valueFrom: {configMapKeyRef: {name: archive-destination, key: replay-role-arn}}
-            - name: AWS_WEB_IDENTITY_TOKEN_FILE
-              value: /var/run/secrets/aws/token
-            - name: AWS_ROLE_SESSION_NAME
-              value: archive-replay
+$identity
           resources:
             requests: {memory: 320Mi, cpu: 100m}
             limits: {memory: 768Mi}
@@ -98,15 +126,10 @@ $args
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           volumeMounts:
-            - {name: tmp, mountPath: /tmp}
-            - {name: aws-token, mountPath: /var/run/secrets/aws, readOnly: true}
+            - {name: tmp, mountPath: /tmp}$token_mount
       volumes:
         - name: tmp
-          emptyDir: {}
-        - name: aws-token
-          projected:
-            sources:
-              - serviceAccountToken: {audience: sts.amazonaws.com, expirationSeconds: 3600, path: token}
+          emptyDir: {}$token_volume
 EOF
 
 # Wait for either outcome; `kubectl wait` can only wait for one condition at a time.
