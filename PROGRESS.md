@@ -8,7 +8,7 @@ surprised me along the way.
 the cluster, so nothing needs a sign-in. **The public view is still live** at
 `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws` — on a Lambda function URL
 rather than CloudFront, which AWS still refuses until it verifies the account. M8 stays at 3 of 5;
-the last two are a teardown and a bill, deferred to the Free-plan deadline
+the last two are a teardown and a bill, declined in favour of keeping the public URL up
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -226,8 +226,12 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
   open incidents from the real table, archived through 2026-09-17. `/api/shipments/{id}` answers
   through it and draws the plan, geofences and travelled line. Not CloudFront: the account is still
   unverified, so the lookup serves the site from its own function URL
-- [ ] `terraform destroy` removes everything cleanly — not yet run; it follows the URL
-- [ ] **AWS billing console reads $0.00** — read at the end of the month
+- [ ] `terraform destroy` removes everything cleanly — **not run, by decision (S25).** It would
+  destroy the resources serving the public URL above, and a recreated function URL gets a new
+  address; keeping the URL was chosen over closing the milestone. `scripts/aws-sweep.sh
+  --expect-empty` is the check this criterion needs whenever the account is wound down
+- [ ] **AWS billing console reads $0.00** — follows the teardown, so also not taken. The budget
+  alert (gross cost, credits excluded) is what watches the account in the meantime
 
 ---
 
@@ -2848,10 +2852,12 @@ advice and destroying a working cluster.
 
 ### Left open
 
-- **M8's criteria four and five are now unreachable as written.** Four is `terraform destroy` removing
-  everything cleanly; five is $0.00 on the bill. Neither can be ticked while the account is left
-  standing and unattended, and neither is ticked here. `aws-sweep.sh --expect-empty` is the check
-  criterion four was always missing, ready for whenever the teardown happens.
+- **M8's criteria four and five are declined, and the milestone stays at three of five.** Four is
+  `terraform destroy` removing everything cleanly; five is $0.00 on the bill. Both require destroying
+  the resources that serve the public URL, and a recreated function URL gets a new address. Asked at
+  the end of this session whether to spend the URL to close the milestone, the answer was to keep the
+  URL — so the two boxes stay empty rather than being argued around. `aws-sweep.sh --expect-empty` is
+  the check criterion four was always missing, ready for whenever the account is wound down.
 - **The account is still live and still costs nothing**, with the budget alert as the backstop. The
   public view at `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws` still
   serves, and still shows real archived data through 2026-09-17. Nothing in this session touched it.
@@ -2871,16 +2877,19 @@ advice and destroying a working cluster.
 with no account, no sign-in and nothing to re-authenticate. That was the decision of this session:
 the cloud had become the slowest part of a platform that is otherwise entirely local.
 
-All 24 sessions are done; M0-M7 and M9 are complete, and M8 is 3 of 5 and stays there.
+All 25 sessions are done; M0-M7 and M9 are complete, and M8 is 3 of 5 and stays there.
 
 1. **Nothing is blocking.** `./scripts/stack-up.sh` and `./scripts/walkthrough.sh` are the loop, and
    `./scripts/local-link.sh` is what `aws-link.sh` used to be.
-2. **M8's criteria four and five are deferred, not abandoned.** Four is a clean `terraform destroy`,
-   five is $0.00 on the bill; both need the account torn down, and the real deadline for that is the
-   Free-plan expiry on **2027-03-10**, not any particular session. `./scripts/infra-down.sh` then
-   `./scripts/aws-sweep.sh --expect-empty` is the pair that proves it. Note the teardown also takes
-   the public URL down, and a recreated function URL gets a **new address**.
-3. **The public view stays up and stays cloud-only**, at
+2. **M8's criteria four and five are declined, not merely deferred.** Four is a clean
+   `terraform destroy`, five is $0.00 on the bill, and both require destroying the account's
+   resources -- which takes the public view down and gives a recreated function URL a **new
+   address**. Asked directly at the end of S25 whether to spend the URL to close the milestone, the
+   answer was to keep the URL. So M8 stands at three of five **by choice**, and the two boxes stay
+   empty rather than being explained away. `./scripts/infra-down.sh` followed by
+   `./scripts/aws-sweep.sh --expect-empty` is the pair that would prove them, whenever the account
+   is wound down -- **2027-03-10** at the latest, when the Free plan expires.
+3. **The public view stays up, by that decision, and stays cloud-only**, at
    `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws`, serving archived data
    through 2026-09-17. Its index is driven by S3 object notifications, so a local version would mean
    replacing the trigger, the store and the database together.
