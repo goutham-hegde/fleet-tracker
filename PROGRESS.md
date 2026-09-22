@@ -3,12 +3,12 @@
 Running log of how this platform gets built — what was decided, what was rejected, and what
 surprised me along the way.
 
-**Last updated:** 2026-09-22 · **Current position:** all 25 sessions done; M0-M7 and M9 complete.
-**The whole platform runs with no cloud account** — as of S25 the archive writes to a MinIO inside
-the cluster, so nothing needs a sign-in. **The public view is still live** at
+**Last updated:** 2026-09-22 · **Current position:** all 25 sessions done and **every milestone
+closed, M0-M9**. **The whole platform runs with no cloud account** — as of S25 the archive writes to
+a MinIO inside the cluster, so nothing needs a sign-in. **The public view is still live** at
 `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws` — on a Lambda function URL
-rather than CloudFront, which AWS still refuses until it verifies the account. M8 stays at 3 of 5;
-the last two are a teardown and a bill, declined in favour of keeping the public URL up
+rather than CloudFront, which AWS still refuses until it verifies the account. M8 closed at 3 of 5:
+its last two criteria are an account teardown and a bill, declined in favour of keeping that URL up
 · **Repo:** [goutham-hegde/fleet-tracker](https://github.com/goutham-hegde/fleet-tracker)
 
 ```
@@ -20,7 +20,7 @@ M4 ██████████  2/2              complete
 M5 ██████████  3/3              complete
 M6 ██████████  1/1              complete
 M7 ██████████  2/2              complete
-M8 ██████████  3/3              ← public, on a function URL; CloudFront still refused
+M8 ██████████  3/3              complete — closed at 3/5 criteria, the last two declined
 M9 ██████████  2/2              complete
 S25 ─────────  1                 off-milestone: the archive, without an account
                25/25 sessions
@@ -226,12 +226,21 @@ the precondition for everything M7 does: a CI job can apply the same manifests t
   open incidents from the real table, archived through 2026-09-17. `/api/shipments/{id}` answers
   through it and draws the plan, geofences and travelled line. Not CloudFront: the account is still
   unverified, so the lookup serves the site from its own function URL
-- [ ] `terraform destroy` removes everything cleanly — **not run, by decision (S25).** It would
+- [ ] `terraform destroy` removes everything cleanly — **declined (S25), not deferred.** It would
   destroy the resources serving the public URL above, and a recreated function URL gets a new
-  address; keeping the URL was chosen over closing the milestone. `scripts/aws-sweep.sh
+  address; keeping the URL was chosen over meeting this criterion. `scripts/aws-sweep.sh
   --expect-empty` is the check this criterion needs whenever the account is wound down
-- [ ] **AWS billing console reads $0.00** — follows the teardown, so also not taken. The budget
-  alert (gross cost, credits excluded) is what watches the account in the meantime
+- [ ] **AWS billing console reads $0.00** — **declined with it**, because it can only be read after
+  that teardown. The budget alert (gross cost, credits excluded) watches the account instead
+
+**Three of five pass, and M8 is closed there as of 2026-09-22.** What the milestone was written to
+build — a public HTTPS URL, real IAM, archived events, at no cost — is delivered and live. Its last
+two criteria test the *wind-down* of the account rather than the capability, and both were declined
+in favour of keeping the public URL: a standing choice, not outstanding work. The two boxes stay
+unticked because they were never checked, and ticking them would be the argument this log refuses to
+make. `./scripts/infra-down.sh` then `./scripts/aws-sweep.sh --expect-empty` is the pair that would
+prove them, whenever the account is wound down — **2027-03-10** at the latest, when the Free plan
+expires.
 
 ---
 
@@ -2870,6 +2879,43 @@ advice and destroying a working cluster.
 
 ---
 
+## S25 continued — Closing M8 at three of five · 2026-09-22 · M8
+
+Documentation only; no code, no infrastructure, nothing deployed or destroyed.
+
+"Finish M8" came up directly, hours after S25 left it at three of five. Finishing it by meeting the
+criteria means `terraform destroy` and a $0.00 bill -- which means destroying the account's
+resources, which takes the public view down and gives a recreated function URL a **new address**.
+Asked which reading was meant, the answer was to close the milestone in the documentation and keep
+the URL. So M8 is now **closed at three of five**, and the two boxes are still empty.
+
+| Decision | Choice | Reasoning |
+|---|---|---|
+| How to finish M8 | **Close it at three of five**, with criteria four and five declined | The milestone's stated capability -- a public HTTPS URL, real IAM, archived events, at $0 -- is built and live. The two open criteria test the *wind-down* of the account, not the capability. Closing on the capability keeps the URL and keeps the record honest |
+| Whether to tick the two boxes | **No.** They stay `[ ]`, marked declined | Neither was ever checked. `terraform destroy` has not run and the September bill has not settled. This log's rule is never to tick an unchecked box, and a milestone closed on a stated decision is more defensible than one closed on two boxes ticked by argument |
+| Tear down to close them properly | **Rejected** | It is the only way to *meet* four and five, and it costs a live public URL whose address cannot be recovered -- the host is a random token AWS assigns at creation, and only CloudFront would preserve an address across a destroy. CloudFront is the thing this account is refused |
+| Whether "closed" means "done with AWS" | **No** | The account stays live and still costs nothing. 2027-03-10, the Free-plan expiry, is still the deadline to upgrade or wind down, and is the only thing that reopens this |
+
+### Changed
+
+- The M8 section now states that three of five pass and the milestone is closed there, and both open
+  criteria are marked **declined, not deferred**.
+- The status line, the milestone bar and README's status block say every milestone is closed, M0-M9,
+  and that M8 closed at three of five by choice. README's session count was stale at 24; it is 25.
+- "Next up" no longer reads as a queue: there is no open milestone and no planned next session.
+- CLAUDE.md's standing rule is unchanged in substance and firmer in wording -- do not propose or run
+  `infra-down.sh`, do not tick those two, and do not read them as leftover work.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `grep` for `M8` across the committed docs | Every remaining "M8 is 3 of 5 / left / next" line is inside a past session log or an ADR, where it is history and stays |
+| `grep` for stale counts (`24 sessions`, `M0-M7 and M9`) | One left, in a LEARNING.md entry from the session that wrote it -- history, untouched |
+| Anything run against AWS | **Nothing.** No sign-in, no plan, no apply, no destroy |
+
+---
+
 ## Next up
 
 **The platform no longer needs AWS.** As of S25 the archive runs on a MinIO inside the cluster, so
@@ -2877,18 +2923,21 @@ advice and destroying a working cluster.
 with no account, no sign-in and nothing to re-authenticate. That was the decision of this session:
 the cloud had become the slowest part of a platform that is otherwise entirely local.
 
-All 25 sessions are done; M0-M7 and M9 are complete, and M8 is 3 of 5 and stays there.
+All 25 sessions are done, and **every milestone is now closed, M0 through M9.** M8 closed at three
+of five criteria rather than by meeting all of them -- see below. There is no open milestone and no
+planned next session; what follows is the standing state of the platform, not a queue of work.
 
 1. **Nothing is blocking.** `./scripts/stack-up.sh` and `./scripts/walkthrough.sh` are the loop, and
    `./scripts/local-link.sh` is what `aws-link.sh` used to be.
-2. **M8's criteria four and five are declined, not merely deferred.** Four is a clean
-   `terraform destroy`, five is $0.00 on the bill, and both require destroying the account's
+2. **M8 is closed at three of five, and criteria four and five are declined, not deferred.** Four is
+   a clean `terraform destroy`, five is $0.00 on the bill, and both require destroying the account's
    resources -- which takes the public view down and gives a recreated function URL a **new
-   address**. Asked directly at the end of S25 whether to spend the URL to close the milestone, the
-   answer was to keep the URL. So M8 stands at three of five **by choice**, and the two boxes stay
-   empty rather than being explained away. `./scripts/infra-down.sh` followed by
-   `./scripts/aws-sweep.sh --expect-empty` is the pair that would prove them, whenever the account
-   is wound down -- **2027-03-10** at the latest, when the Free plan expires.
+   address**. Asked at the end of S25 whether to spend the URL to close the milestone, and again on
+   2026-09-22 when finishing M8 came up directly, the answer both times was to keep the URL. So M8
+   stands at three of five **by choice**: the milestone is closed, the two boxes stay empty rather
+   than being explained away, and neither is work waiting to be done. `./scripts/infra-down.sh`
+   followed by `./scripts/aws-sweep.sh --expect-empty` is the pair that would prove them, whenever
+   the account is wound down -- **2027-03-10** at the latest, when the Free plan expires.
 3. **The public view stays up, by that decision, and stays cloud-only**, at
    `https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws`, serving archived data
    through 2026-09-17. Its index is driven by S3 object notifications, so a local version would mean
