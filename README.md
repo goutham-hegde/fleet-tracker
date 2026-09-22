@@ -6,8 +6,9 @@ Real-time shipment and fleet tracking platform. Ingests location and status even
 dissimilar sources, normalizes them into a canonical Kafka stream, and tracks shipments end to end
 against SLA rules — with a live map dashboard.
 
-> **Status:** all 24 planned sessions built. M0–M7 and M9 complete; M8 is 3 of 5 criteria, with a
-> teardown and a month-end bill left. The public archive view is live at
+> **Status:** all 25 sessions built and every milestone closed, M0–M9. M8 closed at 3 of 5 criteria:
+> the last two are an account teardown and a month-end bill, declined in favour of keeping the
+> public view up rather than left as work. The public archive view is live at
 > **<https://v5s7czprqtpeavdr7hgibilyxy0uwtho.lambda-url.ap-south-1.on.aws>** — on a Lambda function
 > URL rather than CloudFront, which this account may not create until AWS verifies it. See
 > **[PROGRESS.md](PROGRESS.md)** for the build log, the decisions and what is next, and
